@@ -148,7 +148,9 @@ export class BackupEngine {
 
   async start(roots: string[], trigger: 'manual' | 'auto' = 'manual'): Promise<{ runId: string; roots: string[] }> {
     if (this.run) throw new Error('已有备份在进行中(去设置页看进度)')
-    const valid = roots.filter(Boolean)
+    // 空清单兜底:调用方没给目录时回退到配置里的 workspaces
+    const cfgNow = this.getConfig()
+    const valid = (roots.length ? roots : parseWorkspaces(cfgNow.workspaces)).filter(Boolean)
     if (!valid.length) throw new Error('没有可备份的目录:先在设置里填写 workspaces(每行一个绝对路径)')
     const cfg = this.getConfig()
     if (!this.isDestinationConfigured(cfg)) throw new Error('备份目标未配置:先选择后端并填写地址/凭据,再点"测试连接"')

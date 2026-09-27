@@ -1,6 +1,8 @@
+import { access } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import type { BackupEngine, EngineStatus } from './core/engine.js'
 import { parseWorkspaces, type LikeZcodeConfig } from './config.js'
-import type { CommandDefinitionFace } from './types.js'
+import { resolveAgentCwd, type CommandDefinitionFace } from './types.js'
 
 function bar(pct: number): string {
   const filled = Math.max(0, Math.min(10, Math.round(pct * 10)))
@@ -56,6 +58,26 @@ export function renderStatusText(status: EngineStatus): string {
   return lines.join('\n')
 }
 
+/**
+ * 把会话工作目录归一到"项目根":向上找 .git(最多 12 级),找不到就原样用。
+ * 避免"会话在 src 子目录启动,只备份了半个仓库"的情况。
+ */
+export async function resolveWorkspaceRoot(cwd: string): Promise<string> {
+  let dir = cwd.replace(/[\\/]+$/, '')
+  for (let i = 0; i < 12; i++) {
+    try {
+      await access(join(dir, '.git'))
+      return dir
+    } catch {
+      /* 本级没有 .git,继续向上 */
+    }
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return cwd
+}
+
 export interface CommandDeps {
   engine: BackupEngine
   getConfig(): LikeZcodeConfig
@@ -66,38 +88,68 @@ export function createBackupCommand(deps: CommandDeps): CommandDefinitionFace {
   return {
     name: 'backup',
     description: '静默备份代码库到你自己的服务器(致敬 ZCode;每个环节你说了算)',
-    input: { hint: '[now|status|pause|resume|cancel]' },
-    async handler({ rawInput }) {
-      const sub = rawInput.trim().toLowerCase()
+    input: { hint: '[now|here|all|status|pause|resume|cancel]' },
+    async handler({ agent, rawInput }) {
+      const sub = rawInput.trim()
+      const [head = '', ...rest] = sub.split(/\s+/)
+      const keyword = head.toLowerCase()
       try {
-        if (!sub || sub === 'now') {
+        if (!keyword || keyword === 'now' || keyword === 'all') {
           const roots = parseWorkspaces(getConfig().workspaces)
           const started = await engine.start(roots, 'manual')
           return {
             kind: 'success',
             text: [
               '🤫 备份已在后台静默启动——像某次著名事件一样安静,但这次:',
-              `  · 目标是你自己配置的服务器(共 ${started.roots.length} 个目录)`,
+              `  · 范围:全部配置目录(共 ${started.roots.length} 个)`,
+              '  · 目标是你自己配置的服务器',
               '  · 私钥(如开加密)只在你本机',
               '  · 会话内不会再有任何提示(梗本体),进度看 设置 → 插件 → Like ZCode',
               `runId:${started.runId}`,
             ].join('\n'),
           }
         }
-        if (sub === 'status') return { kind: 'success', text: renderStatusText(engine.status()) }
-        if (sub === 'pause') {
+        if (keyword === 'here') {
+          const cwd = resolveAgentCwd(agent)
+          if (!cwd) return { kind: 'error', text: '当前会话没有可用的工作目录(agent.session.cwd 缺失),请改用 /backup all 或 /backup <目录>。' }
+          const root = await resolveWorkspaceRoot(cwd)
+          const started = await engine.start([root], 'manual')
+          return {
+            kind: 'success',
+            text: [
+              '🤫 已开始静默备份当前会话的工作区:',
+              `  · 范围:${root}${root !== cwd ? `(由会话目录 ${cwd} 向上归一到仓库根)` : ''}`,
+              '  · 进度看 设置 → 插件 → Like ZCode;本次运行结束后 /backup status 可查',
+              `runId:${started.runId}`,
+            ].join('\n'),
+          }
+        }
+        // 目录直填:Windows 盘符或 Unix 绝对路径
+        if (/^[a-zA-Z]:[\\/]/.test(head) || head.startsWith('/')) {
+          const root = await resolveWorkspaceRoot(head)
+          const started = await engine.start([root], 'manual')
+          return {
+            kind: 'success',
+            text: `🤫 已开始静默备份:${root}\nrunId:${started.runId}(进度看 设置 → 插件 → Like ZCode)`,
+          }
+        }
+        if (keyword === 'status') return { kind: 'success', text: renderStatusText(engine.status()) }
+        if (keyword === 'pause') {
           engine.pause()
           return { kind: 'success', text: '已暂停。进度仍在 设置 → 插件 → Like ZCode。' }
         }
-        if (sub === 'resume') {
+        if (keyword === 'resume') {
           engine.resume()
           return { kind: 'success', text: '已继续。' }
         }
-        if (sub === 'cancel') {
+        if (keyword === 'cancel') {
           engine.cancel()
           return { kind: 'success', text: '取消中(已上传的去重进度保留,下次续传近乎免费)。' }
         }
-        return { kind: 'error', text: '用法:/backup [now|status|pause|resume|cancel]' }
+        return {
+          kind: 'error',
+          text: `用法:/backup [now|here|all|status|pause|resume|cancel|<目录>]${rest.length ? `(未识别的参数:${head})` : ''}`,
+        }
       } catch (err) {
         return { kind: 'error', text: `备份未启动:${err instanceof Error ? err.message : String(err)}` }
       }

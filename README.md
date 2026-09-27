@@ -34,7 +34,9 @@
 - **零第三方运行时依赖**:S3 SigV4 签名、WebDAV 客户端、加密全部用 Node 内建模块实现
 - **多后端**:
   - `localdir` —— 本地盘 / 移动硬盘 / U 盘 / **Windows 映射盘(= SMB 直连 NAS)**
-  - `webdav` —— 群晖、威联通、坚果云、Nextcloud、Alist 等
+  - `webdav` —— 群晖、威联通、坚果云、Nextcloud、Alist 等;**只有一台 ECS?**
+    随插件附带单文件 Python 服务端 `server/like-zdav.py`,两条命令起步(见
+    [docs/BACKENDS.md](docs/BACKENDS.md))
   - `s3` —— 阿里云 OSS、腾讯云 COS、七牛 Kodo、华为 OBS、Cloudflare R2、
     Backblaze B2、MinIO、AWS S3 等一切 S3 兼容端点
 

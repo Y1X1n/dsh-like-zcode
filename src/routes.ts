@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { BackupEngine } from './core/engine.js'
 import { testBackendConfig } from './backends/index.js'
-import { resolveConfig, type LikeZcodeConfig } from './config.js'
+import { parseWorkspaces, resolveConfig, type LikeZcodeConfig } from './config.js'
 
 const MAX_BODY_BYTES = 256 * 1024
 
@@ -113,9 +113,11 @@ export function createRouteHandlers(deps: RouteDeps) {
   async function runHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!assertTrustedOrigin(req, res)) return
     const body = await readJsonBody(req).catch(() => ({}) as Record<string, unknown>)
+    // 请求未指定目录时回退到配置清单;引擎侧对空清单还有第二道兜底
     const dirs = Array.isArray(body.dirs) ? (body.dirs as unknown[]).map(String) : typeof body.dirs === 'string' ? [body.dirs] : []
+    const roots = dirs.length ? dirs : parseWorkspaces(getConfig().workspaces)
     try {
-      const started = await engine.start(dirs.length ? dirs : [], 'manual')
+      const started = await engine.start(roots, 'manual')
       writeJson(res, 200, { ok: true, ...started })
     } catch (err) {
       writeJson(res, 200, { ok: false, error: err instanceof Error ? err.message : String(err) })

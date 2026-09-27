@@ -33,6 +33,39 @@ net use Z: \\NAS主机名\共享名 /persistent:yes
 
 ---
 
+## ECS / 云服务器(只有一台云主机?推荐这个)
+
+不想上 OSS、手头只有一台 ECS:随插件附带一个**单文件、纯 Python 标准库**的极简
+WebDAV 服务端(`server/like-zdav.py`,约两百行,可整个读完再运行)。不用 docker、
+不用 pip、不用 root,两条命令:
+
+```bash
+# 1. 把脚本传上服务器
+scp server/like-zdav.py user@你的ECS:~/like-zdav.py
+
+# 2. 在 ECS 上启动(--token 换成长口令;安全组放行对应端口)
+ssh user@你的ECS "nohup python3 ~/like-zdav.py --dir ~/backup --port 8060 --token 换个长口令 >/dev/null 2>&1 &"
+```
+
+插件设置里选 **WebDAV**:
+
+| 字段 | 填法 |
+|---|---|
+| 地址 | `http://ECS公网IP:8060` |
+| 用户名 | 任意(服务端只校验密码) |
+| 密码 | `--token` 设置的口令 |
+
+要点:
+
+- 数据只落在 `--dir` 指定的目录,服务端代码就一个文件,建议通读一遍再跑
+- 开机自启(可选):写一个 systemd unit 或 crontab `@reboot`,参考发行版惯例
+- 同地域 OSS 内网端点(如 `oss-cn-hangzhou-internal.aliyuncs.com`)依旧免流量费——
+  如果哪天上了 OSS,现有 S3 后端直接换 endpoint 即可
+- 公网明文 HTTP + Basic 口令有被嗅探的理论风险,介意就套 Nginx 反代加 TLS,
+  或开插件端到端加密(密文落盘,服务器也看不到内容)
+
+---
+
 ## WebDAV
 
 | 字段 | 填法 |

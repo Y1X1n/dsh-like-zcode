@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react'
+import { useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { StatusController } from './controller.js'
 
 /** 设置面(settingsScope.bind 的保守子集;值可能缺字段,全部按 Partial 处理)。 */
@@ -114,6 +114,22 @@ const styles = {
   } as const,
   footer: { marginTop: 8, paddingTop: 6, borderTop: '1px dashed var(--dsw-alias-border-l3, rgba(128,128,128,0.2))', color: 'var(--dsw-alias-label-primary-dimmed, rgba(128,128,128,0.9))', fontSize: 10.5 } as const,
   meme: { marginTop: 4, fontStyle: 'italic', fontSize: 11 } as const,
+  groupToggle: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    width: '100%',
+    border: 'none',
+    background: 'transparent',
+    color: 'var(--dsw-alias-label-primary, inherit)',
+    font: 'inherit',
+    fontSize: 11.5,
+    fontWeight: 600,
+    padding: '2px 0',
+    cursor: 'pointer',
+    textAlign: 'left',
+  } as const,
+  caret: { display: 'inline-block', width: 10, color: 'var(--dsw-alias-label-primary-dimmed, rgba(128,128,128,0.9))' } as const,
 }
 
 const PHASE_TEXT: Record<string, string> = {
@@ -144,12 +160,55 @@ function fmtEta(sec: number): string {
   return `${m}m${s}s`
 }
 
+// ── 可折叠配置组:展开状态存 localStorage,跨会话记住 ──────────────────────────
+
+const GROUP_PREF_KEY = 'lz-open-groups'
+
+function readGroupPrefs(): Record<string, boolean> {
+  try {
+    return JSON.parse(localStorage.getItem(GROUP_PREF_KEY) ?? '{}') as Record<string, boolean>
+  } catch {
+    return {}
+  }
+}
+
+function CollapsibleGroup(props: { groupKey: string; title: string; defaultOpen?: boolean; children: ReactNode }) {
+  const [open, setOpen] = useState<boolean>(() => {
+    const pref = readGroupPrefs()[props.groupKey]
+    return typeof pref === 'boolean' ? pref : (props.defaultOpen ?? false)
+  })
+  const toggle = () => {
+    setOpen((prev) => {
+      const next = !prev
+      try {
+        const prefs = readGroupPrefs()
+        prefs[props.groupKey] = next
+        localStorage.setItem(GROUP_PREF_KEY, JSON.stringify(prefs))
+      } catch {
+        /* 存储不可用时只在本次会话内记忆 */
+      }
+      return next
+    })
+  }
+  return (
+    <div style={styles.group}>
+      <button style={styles.groupToggle} onClick={toggle} aria-expanded={open}>
+        <span style={styles.caret}>{open ? '▾' : '▸'}</span>
+        {props.title}
+      </button>
+      {open && props.children}
+    </div>
+  )
+}
+
 export function createSettingsCard(scope: BoundSettingsScope, controller: StatusController) {
   return function LikeZcodeSettingsCard() {
     useSyncExternalStore((cb) => scope.subscribe(cb), () => scope.getSnapshot())
     useSyncExternalStore((cb) => controller.subscribe(cb), () => controller.getSnapshot())
     const value = scope.getSnapshot().value ?? {}
     const { status, history, error, busy, testResult } = controller.getSnapshot()
+    const [runScope, setRunScope] = useState<'all' | 'dir'>('all')
+    const [runDir, setRunDir] = useState('')
 
     const setBool = (key: 'enabled' | 'includeGit' | 'respectGitignore' | 's3PathStyle' | 'encryptionEnabled') =>
       (e: { target: { checked: boolean } }) => {
@@ -205,7 +264,30 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
             )}
             <div style={styles.meme}>{status.meme}</div>
             <div style={styles.row}>
-              <button style={styles.btn} disabled={busy || running} onClick={() => void controller.actions.run()}>
+              <span style={styles.label}>备份范围</span>
+              <select
+                style={styles.select}
+                value={runScope}
+                onChange={(e) => setRunScope(e.target.value === 'dir' ? 'dir' : 'all')}
+              >
+                <option value="all">全部配置目录</option>
+                <option value="dir">指定目录(本次)</option>
+              </select>
+              {runScope === 'dir' && (
+                <input
+                  style={styles.input}
+                  value={runDir}
+                  placeholder="本次要备份的目录绝对路径"
+                  onChange={(e) => setRunDir(e.target.value)}
+                />
+              )}
+            </div>
+            <div style={styles.row}>
+              <button
+                style={styles.btn}
+                disabled={busy || running || (runScope === 'dir' && !runDir.trim())}
+                onClick={() => void controller.actions.run(runScope === 'dir' && runDir.trim() ? [runDir.trim()] : undefined)}
+              >
                 立即备份
               </button>
               {status.paused ? (
@@ -241,11 +323,11 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
             )}
             {status.nextAutoRunAt && <div style={styles.hint}>下次自动备份:{new Date(status.nextAutoRunAt).toLocaleString()}</div>}
             {status.lastError && <div style={{ ...styles.hint, color: '#e05252' }}>最近错误:{status.lastError}</div>}
+            <div style={styles.hint}>只备份当前会话的工作区:在会话里输入 /backup here(自动向上归一到仓库根)。</div>
           </div>
         )}
 
-        <div style={styles.group}>
-          <div style={styles.groupTitle}>备份内容</div>
+        <CollapsibleGroup groupKey="content" title="备份内容" defaultOpen>
           <div style={styles.row}>
             <textarea
               style={styles.area}
@@ -274,10 +356,9 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
               onBlur={setText('excludePatterns')}
             />
           </div>
-        </div>
+        </CollapsibleGroup>
 
-        <div style={styles.group}>
-          <div style={styles.groupTitle}>备份目标(你自己的服务器;接入指南见 docs/BACKENDS.md)</div>
+        <CollapsibleGroup groupKey="destination" title="备份目标(你自己的服务器;接入指南见 docs/BACKENDS.md,含 ECS 一条命令方案)">
           <div style={styles.row}>
             <span style={styles.label}>类型</span>
             <select style={styles.select} value={backend} onChange={setText('backend')}>
@@ -332,10 +413,9 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
               </div>
             </>
           )}
-        </div>
+        </CollapsibleGroup>
 
-        <div style={styles.group}>
-          <div style={styles.groupTitle}>限速与计划(不影响你正常上网)</div>
+        <CollapsibleGroup groupKey="schedule" title="限速与计划(不影响你正常上网)">
           <div style={styles.row}>
             <span style={styles.label}>限速(KB/s)</span>
             <input style={styles.input} value={String(value.maxUploadKBps ?? 4096)} onBlur={setNumber('maxUploadKBps')} />
@@ -358,10 +438,9 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
               <input style={styles.input} value={String(value.windowEnd ?? 7)} onBlur={setNumber('windowEnd')} />
             </div>
           )}
-        </div>
+        </CollapsibleGroup>
 
-        <div style={styles.group}>
-          <div style={styles.groupTitle}>加密与保留(私钥永远只在你本机)</div>
+        <CollapsibleGroup groupKey="security" title="加密与保留(私钥永远只在你本机)">
           <div style={styles.row}>
             <label style={styles.row}>
               <input type="checkbox" checked={value.encryptionEnabled === true} onChange={setBool('encryptionEnabled')} />
@@ -372,7 +451,7 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
             <input style={styles.input} value={String(value.retentionRuns ?? 30)} onBlur={setNumber('retentionRuns')} />
           </div>
           <div style={styles.hint}>开启加密后建议同时更换路径前缀(旧的前缀里可能有未加密的明文块)。</div>
-        </div>
+        </CollapsibleGroup>
 
         <div style={styles.footer}>
           <div>

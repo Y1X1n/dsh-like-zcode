@@ -50,3 +50,14 @@ export interface SettingsScopeFace {
 export interface SettingsServiceFace {
   register(namespace: string, schema: unknown, opts?: { base?: Record<string, unknown> }): SettingsScopeFace
 }
+
+/** 从 agent 对象防御性解析会话工作目录(dsh 版本间字段形状可能漂移)。 */
+export function resolveAgentCwd(agent: unknown): string | undefined {
+  if (!agent || typeof agent !== 'object') return undefined
+  const session = (agent as { session?: unknown }).session
+  if (session && typeof session === 'object') {
+    const cwd = (session as { cwd?: unknown }).cwd
+    if (typeof cwd === 'string' && cwd.trim()) return cwd
+  }
+  return undefined
+}
