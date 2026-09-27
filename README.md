@@ -27,18 +27,21 @@
 - **内容寻址去重**:第二次备份只有真正变化的文件走网络(通常接近 0 字节),
   却保留每一时点的完整快照——比 ZCode 的 313MB 整包重传优雅得多
 - **快照清单**:任意时刻的可还原点,保留策略自动清理超份数旧清单
+- **按来源目录分组**:远端一个备份目录 = 一个工作区文件夹,多项目互不掺和
+- **按会话备份**:备份范围可选某个 dsh 会话(sessionid)对应的工作区,快照带会话标记;
+  在会话里 `/backup here` 一句话搞定
 - **静默运行**:自动备份不产生任何会话消息/弹窗/提示(结构上就不注入会话 UI);
   进度实时显示在 设置 → 插件 → Like ZCode 卡片
 - **带宽自律**:全局令牌桶限速(默认 4MB/s)、并发上限、夜间窗口、RTT 升高自动降速
 - **可选端到端加密**:AES-256-GCM + scrypt,私钥只在你本机(反着致敬"私钥仅存云端")
 - **零第三方运行时依赖**:S3 SigV4 签名、WebDAV 客户端、加密全部用 Node 内建模块实现
-- **多后端**:
+- **多后端 + 服务商预设**:
   - `localdir` —— 本地盘 / 移动硬盘 / U 盘 / **Windows 映射盘(= SMB 直连 NAS)**
-  - `webdav` —— 群晖、威联通、坚果云、Nextcloud、Alist 等;**只有一台 ECS?**
-    随插件附带单文件 Python 服务端 `server/like-zdav.py`,两条命令起步(见
+  - `webdav` —— 群晖、威联通、坚果云、Nextcloud、Alist、ECS 自建(like-zdav.py)
+  - `s3` —— 阿里云 OSS、腾讯云 COS、华为云 OBS、京东云 OSS、七牛 Kodo、
+    Cloudflare R2、Backblaze B2、MinIO、AWS S3 等一切 S3 兼容端点
+  - 选厂商即自动填 endpoint/region/寻址方式,你只填自己的桶和密钥(逐家接入流程见
     [docs/BACKENDS.md](docs/BACKENDS.md))
-  - `s3` —— 阿里云 OSS、腾讯云 COS、七牛 Kodo、华为 OBS、Cloudflare R2、
-    Backblaze B2、MinIO、AWS S3 等一切 S3 兼容端点
 
 ## 安装
 
@@ -54,16 +57,21 @@ dsh plugin --profile web add E:\path\to\dsh-like-zcode
 ## 快速上手
 
 1. **填目录**:「备份内容」里每行一个要备份的绝对路径(如 `E:\work\project-a`)
-2. **填服务器**:「备份目标」选类型并填地址/凭据(各厂商参数见 [docs/BACKENDS.md](docs/BACKENDS.md)),
+2. **填服务器**:「备份目标」→ **服务商预设** 选你的厂商(自动填 endpoint/region/寻址)→
+   按提示填桶名和密钥(各厂商详细步骤见 [docs/BACKENDS.md](docs/BACKENDS.md)),
    点 **测试连接** 确认可用
 3. **定规矩**:限速、计划(手动/按间隔/夜间窗口)、是否加密、保留多少份快照
 4. **打开总开关**(默认是关的——这是本插件与它致敬对象的第一个区别)
-5. 手动触发:`/backup now`;或设置页点 **立即备份**
+5. 手动触发:`/backup now`(全部配置目录)、`/backup here`(只备份当前会话的工作区);
+   或设置页选备份范围后点 **立即备份**
 
 命令:
 
 ```
-/backup            # 立即静默备份(后台执行,一句话确认,不刷屏)
+/backup            # 备份全部配置目录(后台执行,一句话确认,不刷屏)
+/backup here       # 只备份当前会话的工作区(自动向上归一到仓库根,带会话标记)
+/backup all        # 显式备份全部配置目录
+/backup <目录>     # 备份指定目录
 /backup status     # 查看进度与最近快照
 /backup pause      # 暂停
 /backup resume     # 继续
@@ -73,11 +81,13 @@ dsh plugin --profile web add E:\path\to\dsh-like-zcode
 ## 远端目录结构
 
 ```
-<remotePrefix>/                 默认 dsh-like-zcode,可改
-├── meta.json                   插件标记("用户本人主动开启并知情")
-├── keymeta.json                加密元数据:仅 salt + 校验令牌,不含密钥
-├── blobs/<前2位>/<sha256>      内容寻址存储块(gzip[+加密])
-└── snapshots/<时间戳>.json.gz  快照清单(含文件列表/哈希/大小/计数)
+<remotePrefix>/                          默认 dsh-like-zcode,可改
+├── <工作区slug>/                        每个备份目录一个独立文件夹(0.1.7+)
+│   ├── meta.json                        插件标记("用户本人主动开启并知情")
+│   ├── keymeta.json                     加密元数据:仅 salt + 校验令牌,不含密钥
+│   ├── blobs/<前2位>/<sha256>           内容寻址存储块(gzip[+加密])
+│   └── snapshots/<时间戳>.json.gz       快照清单(含文件列表/哈希/大小/会话标记)
+└── <另一个工作区slug>/                   多项目互不掺和
 ```
 
 ## 关于「静默」的边界(把话说清楚)

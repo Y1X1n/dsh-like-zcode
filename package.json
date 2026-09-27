@@ -1,6 +1,6 @@
 {
   "name": "@y1x1n/dsh-like-zcode",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "DeepSeek Harness 插件:致敬 2026-09 ZCode 静默备份事件——全量代码库备份,但服务器是你自己填的、开关默认关、私钥在你手里、带宽你限速。会话内零通知,进度只在插件设置页。",
   "license": "MIT",
   "type": "module",
