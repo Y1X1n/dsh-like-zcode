@@ -85,3 +85,16 @@ export function findSession(sessionId: string, sessionsDir?: string): SessionInf
     listSessions(sessionsDir).find((s) => s.sessionId.toLowerCase() === key && s.workspace) ?? null
   )
 }
+
+/**
+ * 把工作区绝对路径变成远端存储里的"目录名"(key 前缀段):
+ * 'E:\dsh-plugins\dsh-prompt-optimizer' → 'E-dsh-plugins-dsh-prompt-optimizer'。
+ * 段内不产生 '/',保证一个工作区 = 远端一个一级文件夹。
+ */
+export function workspaceSlug(root: string): string {
+  const slug = root
+    .replace(/[\\/:*?"<>|\s]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return slug || 'workspace'
+}

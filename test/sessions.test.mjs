@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { decodeWorkspaceDir, findSession, listSessions } from '../lib/core.js'
+import { decodeWorkspaceDir, findSession, listSessions, workspaceSlug } from '../lib/core.js'
 
 test('工作区目录名解码:常规路径', () => {
   assert.equal(decodeWorkspaceDir('--E-dsh-plugins-dsh-prompt-optimizer--'), 'E:\\dsh-plugins\\dsh-prompt-optimizer')
@@ -17,6 +17,13 @@ test('工作区目录名解码:~XXXX 转义(空格)', () => {
 test('工作区目录名解码:非会话名原样返回', () => {
   assert.equal(decodeWorkspaceDir('random-dir'), 'random-dir')
   assert.equal(decodeWorkspaceDir('--C--'), '--C--')
+})
+
+test('workspaceSlug:工作区路径 → 远端目录名(段内无 /)', () => {
+  assert.equal(workspaceSlug('E:\\dsh-plugins\\dsh-prompt-optimizer'), 'E-dsh-plugins-dsh-prompt-optimizer')
+  assert.equal(workspaceSlug('C:\\Users\\yixin\\AppData\\Local\\Temp'), 'C-Users-yixin-AppData-Local-Temp')
+  assert.equal(workspaceSlug('E:\\中文 项目'), 'E-中文-项目', '空格与分隔符归一,CJK 保留')
+  assert.ok(!workspaceSlug('E:\\a\\b').includes('/'), 'slug 段内不得出现 /')
 })
 
 test('listSessions:枚举会话、按存在性过滤、按时间排序', async () => {
@@ -45,7 +52,8 @@ test('listSessions:枚举会话、按存在性过滤、按时间排序', async (
   assert.equal(ids.length, 3)
   assert.equal(list.find((s) => s.sessionId.startsWith('bbbbbbbb'))?.workspace, targetDir, '解码出的工作区存在 → 非空')
   const gone = list.find((s) => s.sessionId.startsWith('cccccccc'))
-  assert.equal(gone?.workspace ?? 'missing', null)
+  assert.ok(gone, '工作区不存在的会话仍应被枚举')
+  assert.equal(gone.workspace, null, '但其工作区不可用(workspace=null)')
 
   // findSession 精确查找(大小写不敏感)
   const found = findSession('AAAAAAAA-1111-2222-3333-444444444444', fake)

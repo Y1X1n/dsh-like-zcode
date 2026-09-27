@@ -6,6 +6,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { normalizeBackend, normalizeScheduleMode, parseWorkspaces, type LikeZcodeConfig } from '../config.js'
 import { createBackend } from '../backends/index.js'
 import type { BackupBackend } from '../backends/types.js'
+import { workspaceSlug } from '../sessions.js'
 import { StateStore, emptyProgress, type HistoryEntry, type RunProgress } from '../state.js'
 import { deriveKey, hashFile, makeSalt, checkToken, verifyPassphrase, transformFileToFile, type CryptoMaterial } from './crypto.js'
 import { retentionTargets, serializeManifest, snapshotId, type ManifestFile, type SnapshotManifest } from './manifest.js'
@@ -62,12 +63,13 @@ function pickMeme(phase: string): string {
   return pool[Math.floor(Date.now() / 60_000) % pool.length] ?? ''
 }
 
-/** 后端身份(去重索引/密钥元数据按它分文件):kind + 目标 + 前缀。 */
-export function backendKeyFor(cfg: LikeZcodeConfig): string {
+/** 后端身份(去重索引/密钥元数据按它分文件):kind + 目标 + 前缀 + 工作区 slug。 */
+export function backendKeyFor(cfg: LikeZcodeConfig, slug?: string): string {
   const kind = normalizeBackend(cfg.backend)
   const dest =
     kind === 'localdir' ? cfg.localDir : kind === 'webdav' ? cfg.webdavUrl : `${cfg.s3Endpoint}|${cfg.s3Bucket}|${cfg.s3Region}`
-  return createHash('sha256').update(`${kind}|${dest.trim().toLowerCase()}|${cfg.remotePrefix}`).digest('hex').slice(0, 16)
+  const prefix = `${cfg.remotePrefix}${slug ? `/${slug}` : ''}`
+  return createHash('sha256').update(`${kind}|${dest.trim().toLowerCase()}|${prefix}`).digest('hex').slice(0, 16)
 }
 
 export class BackupEngine {
@@ -232,20 +234,19 @@ export class BackupEngine {
     const startedAll = Date.now()
     let encUsed = false
     try {
-      const backend = createBackend(cfg)
-      await backend.init()
-      const crypto = await this.ensureCrypto(backend, cfg)
-      encUsed = crypto !== null
-      await this.loadKnown(backendKeyFor(cfg))
-
       const totals = { files: 0, bytes: 0, uploaded: 0, uploadedBytes: 0, skipped: 0, tooBig: 0, errors: 0 }
       const historyEntries: HistoryEntry[] = []
 
+      // 每个根目录一个独立后端视图(远端按来源目录分组:各自拥有 blobs 去重池、
+      // 快照清单、保留策略与密钥元数据),互不掺和
       for (let i = 0; i < run.roots.length; i++) {
         if (run.abort.signal.aborted) break
         run.currentRootIndex = i
-        const entry = await this.backupOneRoot(run, cfg, backend, crypto, run.roots[i], totals)
-        if (entry) historyEntries.push(entry)
+        const entry = await this.backupOneRoot(run, cfg, run.roots[i], totals)
+        if (entry) {
+          historyEntries.push(entry)
+          encUsed = encUsed || entry.enc
+        }
       }
 
       if (run.abort.signal.aborted) {
@@ -280,11 +281,14 @@ export class BackupEngine {
   private async backupOneRoot(
     run: ActiveRun,
     cfg: LikeZcodeConfig,
-    backend: BackupBackend,
-    crypto: CryptoMaterial | null,
     root: string,
     totals: { files: number; bytes: number; uploaded: number; uploadedBytes: number; skipped: number; tooBig: number; errors: number },
   ): Promise<HistoryEntry | null> {
+    const slug = workspaceSlug(root)
+    const backend = createBackend(cfg, slug)
+    await backend.init()
+    const crypto = await this.ensureCrypto(backend, cfg, slug)
+    await this.loadKnown(backendKeyFor(cfg, slug))
     const startedAt = Date.now()
     run.progress.phase = 'scanning'
     run.progress.dir = root
@@ -505,9 +509,9 @@ export class BackupEngine {
 
   // ── 加密材料 ──────────────────────────────────────────────────────────────
 
-  private async ensureCrypto(backend: BackupBackend, cfg: LikeZcodeConfig): Promise<CryptoMaterial | null> {
+  private async ensureCrypto(backend: BackupBackend, cfg: LikeZcodeConfig, slug?: string): Promise<CryptoMaterial | null> {
     if (!cfg.encryptionEnabled || !cfg.passphrase) return null
-    const bkey = backendKeyFor(cfg)
+    const bkey = backendKeyFor(cfg, slug)
     const localPath = join(this.store.dir, `keymeta-${bkey}.json`)
 
     const remoteBuf = await backend.getKeyMeta().catch(() => null)

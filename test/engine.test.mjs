@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import test from 'node:test'
-import { BackupEngine, resolveConfig } from '../lib/core.js'
+import { BackupEngine, resolveConfig, workspaceSlug } from '../lib/core.js'
 
 const POLL_MS = 100
 const TIMEOUT_MS = 30_000
@@ -42,7 +42,7 @@ test('引擎端到端:扫描 → 去重上传 → 清单 → 二次近零上传'
     await engine.start([src], 'manual')
     assert.equal(await waitForPhase(engine, ['done']), 'done')
 
-    const prefix = join(dest, 'dsh-like-zcode')
+    const prefix = join(dest, 'dsh-like-zcode', workspaceSlug(src))
     const snapshotDir = join(prefix, 'snapshots')
     const names = (await readdir(snapshotDir)).sort()
     assert.equal(names.length, 1, '应有一份快照清单')
@@ -97,7 +97,7 @@ test('引擎端到端:加密路径(内容块与清单均加密,远端无密钥�
     await engine.start([src], 'manual')
     assert.equal(await waitForPhase(engine, ['done']), 'done')
 
-    const prefix = join(dest, 'dsh-like-zcode')
+    const prefix = join(dest, 'dsh-like-zcode', workspaceSlug(src))
     const keymeta = JSON.parse(await readFile(join(prefix, 'keymeta.json'), 'utf-8'))
     assert.ok(keymeta.salt && keymeta.check, 'keymeta 含 salt+check')
     assert.equal(Object.keys(keymeta).sort().join(','), 'check,salt', '远端 keymeta 不得出现密钥字段')
@@ -143,7 +143,7 @@ test('引擎:保留策略清理超份数旧清单', async () => {
       await engine.start([src], 'manual')
       await waitForPhase(engine, ['done'])
     }
-    const snapshotDir = join(dest, 'dsh-like-zcode', 'snapshots')
+    const snapshotDir = join(dest, 'dsh-like-zcode', workspaceSlug(src), 'snapshots')
     const names = await readdir(snapshotDir)
     assert.ok(names.length <= 3, `保留 3 份,实际 ${names.length}`)
   } finally {

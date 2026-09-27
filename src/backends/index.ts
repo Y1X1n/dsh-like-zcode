@@ -6,9 +6,14 @@ import { normalizeBackend, type LikeZcodeConfig } from '../config.js'
 
 export * from './types.js'
 
-export function createBackend(cfg: LikeZcodeConfig): BackupBackend {
+/**
+ * slug:工作区子目录名。传入时,该工作区的全部数据(meta/blobs/snapshots)
+ * 都落在 `<remotePrefix>/<slug>/` 之下——远端按来源目录分组。
+ */
+export function createBackend(cfg: LikeZcodeConfig, slug?: string): BackupBackend {
   const kind = normalizeBackend(cfg.backend)
-  const prefix = (cfg.remotePrefix || 'dsh-like-zcode').replace(/^[\\/]+|[\\/]+$/g, '')
+  const base = (cfg.remotePrefix || 'dsh-like-zcode').replace(/^[\\/]+|[\\/]+$/g, '')
+  const prefix = slug ? `${base}/${slug}` : base
   switch (kind) {
     case 'webdav':
       return new WebDavBackend(cfg.webdavUrl, cfg.webdavUsername, cfg.webdavPassword, prefix)
