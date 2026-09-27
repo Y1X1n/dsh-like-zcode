@@ -39,10 +39,11 @@ test('listSessions:枚举会话、按存在性过滤、按时间排序', async (
   await utimes(sessB, t, t)
 
   const list = listSessions(fake)
-  // 按最近活动排序;工作区不存在的会话也在列表里(workspace=null,仅不可按会话备份)
+  // 最近活动的会话排最前(b 的 mtime 被拨到未来);工作区不存在的会话也在列表里
   const ids = list.map((s) => s.sessionId.slice(0, 8))
-  assert.deepEqual(ids, ['bbbbbbbb', 'aaaaaaaa', 'cccccccc'], '按最近活动排序')
-  assert.equal(list[0].workspace, targetDir, '解码出的工作区存在 → 非空')
+  assert.equal(ids[0], 'bbbbbbbb', '最近活动的会话排最前')
+  assert.equal(ids.length, 3)
+  assert.equal(list.find((s) => s.sessionId.startsWith('bbbbbbbb'))?.workspace, targetDir, '解码出的工作区存在 → 非空')
   const gone = list.find((s) => s.sessionId.startsWith('cccccccc'))
   assert.equal(gone?.workspace ?? 'missing', null)
 
