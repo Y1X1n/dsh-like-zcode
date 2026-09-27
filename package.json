@@ -1,0 +1,70 @@
+{
+  "name": "@y1x1n/dsh-like-zcode",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness 插件:致敬 2026-09 ZCode 静默备份事件——全量代码库备份,但服务器是你自己填的、开关默认关、私钥在你手里、带宽你限速。会话内零通知,进度只在插件设置页。",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Y1X1n/dsh-like-zcode.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Y1X1n/dsh-like-zcode/issues"
+  },
+  "homepage": "https://github.com/Y1X1n/dsh-like-zcode#readme",
+  "keywords": [
+    "deepseek",
+    "dsh",
+    "harness",
+    "backup",
+    "zcode",
+    "parody",
+    "plugin",
+    "cordis"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "prepare": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node test/smoke.mjs && node test/ignore.test.mjs && node test/throttle.test.mjs && node test/manifest.test.mjs && node test/crypto.test.mjs && node test/s3.test.mjs && node test/engine.test.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ]
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-settings": "^0.1.5-rc.1",
+    "@deepseek-ai/schemastery": "^3.18.2"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.3.1",
+    "esbuild": "^0.24.0",
+    "react": "^18.2.0",
+    "typescript": "^5.5.0"
+  }
+}
