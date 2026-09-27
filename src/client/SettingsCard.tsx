@@ -48,7 +48,6 @@ const styles = {
     fontSize: 12.5,
     lineHeight: 1.6,
   } as const,
-  header: { display: 'flex', alignItems: 'baseline', gap: 8 } as const,
   title: { fontWeight: 600, fontSize: 13 } as const,
   summary: { color: 'var(--dsw-alias-label-primary-dimmed, rgba(128,128,128,0.9))', fontSize: 11.5, flex: 1 } as const,
   desc: { color: 'var(--dsw-alias-label-primary-dimmed, rgba(128,128,128,0.9))', fontSize: 11.5, marginTop: 2 } as const,
@@ -130,6 +129,117 @@ const styles = {
     textAlign: 'left',
   } as const,
   caret: { display: 'inline-block', width: 10, color: 'var(--dsw-alias-label-primary-dimmed, rgba(128,128,128,0.9))' } as const,
+  cardHeader: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: 8,
+    width: '100%',
+    border: 'none',
+    background: 'transparent',
+    color: 'var(--dsw-alias-label-primary, inherit)',
+    font: 'inherit',
+    padding: 0,
+    cursor: 'pointer',
+    textAlign: 'left',
+  } as const,
+}
+
+// ── 服务商预设:选厂商 → 自动填 endpoint/region/寻址等通用字段 ────────────────
+// 只填"公共已知"部分;Bucket/密钥/账号永远是用户自己的事。
+
+interface ProviderPreset {
+  label: string
+  fields: Partial<LikeZcodeSettingsValue>
+  hint: string
+}
+
+const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
+  aliyun: {
+    label: '阿里云 OSS',
+    fields: {
+      backend: 's3',
+      s3Endpoint: 'https://oss-cn-hangzhou.aliyuncs.com',
+      s3Region: 'oss-cn-hangzhou',
+      s3PathStyle: true,
+    },
+    hint: '地域按你的 Bucket 调整(如 oss-cn-beijing);ECS 同地域可用内网端点 oss-cn-xxx-internal.aliyuncs.com 免流量费。',
+  },
+  tencent: {
+    label: '腾讯云 COS',
+    fields: {
+      backend: 's3',
+      s3Endpoint: 'https://cos.ap-beijing.myqcloud.com',
+      s3Region: 'ap-beijing',
+      s3PathStyle: true,
+    },
+    hint: '地域按你的存储桶调整(如 ap-guangzhou);同地域云主机可换内网端点 cos.ap-xxx-internal.myqcloud.com。',
+  },
+  huawei: {
+    label: '华为云 OBS',
+    fields: {
+      backend: 's3',
+      s3Endpoint: 'https://obs.cn-north-4.myhuaweicloud.com',
+      s3Region: 'cn-north-4',
+      s3PathStyle: true,
+    },
+    hint: '地域按你的桶调整;密钥在控制台"我的凭证"里创建。',
+  },
+  jdcloud: {
+    label: '京东云 OSS',
+    fields: {
+      backend: 's3',
+      s3Endpoint: 'https://s3.cn-north-1.jdcloud-oss.com',
+      s3Region: 'cn-north-1',
+      s3PathStyle: true,
+    },
+    hint: '以京东云控制台展示的 S3 兼容 Endpoint 为准,预设仅供参考。',
+  },
+  r2: {
+    label: 'Cloudflare R2',
+    fields: {
+      backend: 's3',
+      s3Endpoint: 'https://<账户ID>.r2.cloudflarestorage.com',
+      s3Region: 'auto',
+      s3PathStyle: true,
+    },
+    hint: '把 <账户ID> 换成 R2 控制台右侧的账户 ID;需先创建 Object Read & Write 权限的 API Token。',
+  },
+  jianguoyun: {
+    label: '坚果云',
+    fields: {
+      backend: 'webdav',
+      webdavUrl: 'https://dav.jianguoyun.com/dav/',
+    },
+    hint: '用户名=注册邮箱,密码=应用密码(网页版 → 账户信息 → 安全选项);免费版流量配额较小。',
+  },
+  synology: {
+    label: '群晖 DSM',
+    fields: {
+      backend: 'webdav',
+      webdavUrl: 'http://NAS局域网IP:5005',
+    },
+    hint: '先在套件中心安装 WebDAV Server 并启用 5005(HTTP)/5006(HTTPS);建议为备份单开一个受限账号。',
+  },
+  ecs: {
+    label: 'ECS 自建(like-zdav.py)',
+    fields: {
+      backend: 'webdav',
+      webdavUrl: 'http://ECS公网IP:8060',
+    },
+    hint: '先在服务器上跑 server/like-zdav.py(两条命令,见 docs/BACKENDS.md),密码填启动时的 --token。',
+  },
+}
+
+const CARD_OPEN_KEY = 'lz-card-open'
+
+function readCardOpen(): boolean {
+  try {
+    const raw = localStorage.getItem(CARD_OPEN_KEY)
+    if (raw === null) return true
+    return raw === '1'
+  } catch {
+    return true
+  }
 }
 
 const PHASE_TEXT: Record<string, string> = {
@@ -209,6 +319,26 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
     const { status, history, error, busy, testResult } = controller.getSnapshot()
     const [runScope, setRunScope] = useState<'all' | 'dir'>('all')
     const [runDir, setRunDir] = useState('')
+    const [cardOpen, setCardOpen] = useState<boolean>(readCardOpen)
+    const [preset, setPreset] = useState<string>('custom')
+    const toggleCard = () => {
+      setCardOpen((prev) => {
+        const next = !prev
+        try {
+          localStorage.setItem(CARD_OPEN_KEY, next ? '1' : '0')
+        } catch {
+          /* 存储不可用时只在本次会话内记忆 */
+        }
+        return next
+      })
+    }
+    const applyPreset = (key: string) => {
+      const presetDef = PROVIDER_PRESETS[key]
+      if (!presetDef) return
+      for (const [field, fieldValue] of Object.entries(presetDef.fields)) {
+        void scope.set(field as keyof LikeZcodeSettingsValue, fieldValue as never)
+      }
+    }
 
     const setBool = (key: 'enabled' | 'includeGit' | 'respectGitignore' | 's3PathStyle' | 'encryptionEnabled') =>
       (e: { target: { checked: boolean } }) => {
@@ -231,14 +361,19 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
 
     const currentFields = (): Record<string, unknown> => ({ ...value })
 
+    const summary = status
+      ? `${PHASE_TEXT[status.phase] ?? status.phase}${status.paused ? '(暂停)' : ''}${running && run ? ` · ${(pct * 100).toFixed(0)}%` : ''} · 后端 ${status.backend} · ${status.enabled ? '已启用' : '未启用'}`
+      : '连接中…'
+
     return (
       <div style={styles.card}>
-        <div style={styles.header}>
+        <button style={styles.cardHeader} onClick={toggleCard} aria-expanded={cardOpen}>
+          <span style={styles.caret}>{cardOpen ? '▾' : '▸'}</span>
           <span style={styles.title}>🐦‍🔥 Like ZCode 静默备份</span>
-          <span style={styles.summary}>
-            {status ? `${PHASE_TEXT[status.phase] ?? status.phase}${status.paused ? '(暂停)' : ''}${running && run ? ` · ${(pct * 100).toFixed(0)}%` : ''} · 后端 ${status.backend}` : '连接中…'}
-          </span>
-        </div>
+          <span style={styles.summary}>{summary}</span>
+        </button>
+        {cardOpen && (
+          <>
         <div style={styles.desc}>
           致敬 2026-09-18「ZCode 静默备份事件」的镜像版:同样全量、同样静默、连 .git 历史都备——
           但服务器是你自己填的、开关默认关、私钥在你手里、带宽你限速。会话内零通知(梗本体),进度只在这里。
@@ -360,6 +495,28 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
 
         <CollapsibleGroup groupKey="destination" title="备份目标(你自己的服务器;接入指南见 docs/BACKENDS.md,含 ECS 一条命令方案)">
           <div style={styles.row}>
+            <span style={styles.label}>服务商预设</span>
+            <select
+              style={styles.select}
+              value={preset}
+              onChange={(e) => {
+                const key = e.target.value
+                setPreset(key)
+                applyPreset(key)
+              }}
+            >
+              <option value="custom">自定义(手动填写)</option>
+              {Object.entries(PROVIDER_PRESETS).map(([key, presetDef]) => (
+                <option key={key} value={key}>
+                  {presetDef.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          {preset !== 'custom' && PROVIDER_PRESETS[preset] && (
+            <div style={styles.hint}>{PROVIDER_PRESETS[preset].hint}</div>
+          )}
+          <div style={styles.row}>
             <span style={styles.label}>类型</span>
             <select style={styles.select} value={backend} onChange={setText('backend')}>
               <option value="localdir">localdir(本地盘 / NAS 映射盘)</option>
@@ -462,6 +619,8 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
             致敬 2026-09-18 · 42,411 files · 313MB · 564 uploads · Repo Wiki —— 下一次,数据应该在用户手里。🐦‍🔥
           </div>
         </div>
+          </>
+        )}
       </div>
     )
   }
