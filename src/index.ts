@@ -20,18 +20,31 @@ export function apply(ctx: Context, config: unknown): void {
   // 显式用 schema 解析补齐默认值(总开关默认关,等用户亲手打开)。
   const baseConfig = resolveConfig(config)
   const cfgRef: { current: LikeZcodeConfig } = { current: baseConfig }
-  const engine = new BackupEngine(() => cfgRef.current, stateDir())
+  let configSource: (() => LikeZcodeConfig) | null = null
+  const getConfig = (): LikeZcodeConfig => {
+    try {
+      return configSource?.() ?? cfgRef.current
+    } catch {
+      return cfgRef.current
+    }
+  }
+  const engine = new BackupEngine(getConfig, stateDir())
 
   lctx.effect?.(() => () => engine.stop())
 
   // ── 设置:组合层配置为 base,设置页修改实时生效。
+  // installSection(0.1.2+)hooks 必须同时提供 setSource 与 onChange——
+  // 漏 onChange 会在注册时抛 TypeError,整个名空间就不见了(踩过的坑)。
   lctx.inject?.(['settings'], (sctx) => {
     const settings = (sctx as { settings?: SettingsProvider }).settings
     if (!settings) return
     if (typeof (settings as { installSection?: unknown }).installSection === 'function') {
       settings.installSection(ctx, NS, ConfigSchema, baseConfig, {
         setSource: (source: () => LikeZcodeConfig) => {
-          cfgRef.current = source()
+          configSource = source
+        },
+        onChange: () => {
+          /* 引擎每次运行都实时读 getConfig,无需额外刷新动作 */
         },
       } as never)
       return
@@ -45,7 +58,7 @@ export function apply(ctx: Context, config: unknown): void {
   })
 
   // ── HTTP 路由:状态/快照/日志(读)+ run/pause/resume/cancel/test(写,Origin 围栏)。
-  const handlers = createRouteHandlers({ engine, getConfig: () => cfgRef.current })
+  const handlers = createRouteHandlers({ engine, getConfig })
   const routes: [string, (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => void | Promise<void>][] = [
     [`${ROUTE_PREFIX}/status`, handlers.statusHandler],
     [`${ROUTE_PREFIX}/snapshots`, handlers.snapshotsHandler],
@@ -79,7 +92,7 @@ export function apply(ctx: Context, config: unknown): void {
   lctx.inject?.(['commands'], (sctx) => {
     const commands = (sctx as { commands?: CommandsServiceFace }).commands
     if (!commands || typeof commands.register !== 'function') return
-    const dispose = commands.register(createBackupCommand({ engine, getConfig: () => cfgRef.current }) as never)
+    const dispose = commands.register(createBackupCommand({ engine, getConfig }) as never)
     lctx.effect?.(() => () => dispose())
     console.log(`[${name}] command registered: /backup`)
   })
