@@ -16,6 +16,18 @@ await build({
   logLevel: 'info',
 })
 
+// 核心引擎聚合:供 node:test 直接引用(纯逻辑,不依赖 dsh 宿主)。
+await build({
+  entryPoints: ['src/core/index.ts'],
+  outfile: 'lib/core.js',
+  bundle: true,
+  platform: 'node',
+  format: 'esm',
+  target: 'node18',
+  packages: 'external',
+  logLevel: 'info',
+})
+
 // Client 半:loader 的 lazy-CJS factory 形态(对齐官方包的产物结构)。
 // react 与 @deepseek-ai/* 是页面运行时外部模块,不打包进 bundle。
 // loader id 必须等于插件 npm 包名 —— 宿主 client-modules 按包名 serve bundle。
@@ -43,4 +55,4 @@ await build({
   logLevel: 'info',
 })
 
-console.log('[build] lib/index.js + lib/client.js done')
+console.log('[build] lib/index.js + lib/core.js + lib/client.js done')
