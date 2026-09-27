@@ -5,6 +5,8 @@ import type { BackendKind } from '../config.js'
 
 const MULTIPART_THRESHOLD = 32 * 1024 * 1024
 const PART_SIZE = 16 * 1024 * 1024
+// 空 body 的真实 sha256:R2 等实现不接受 UNSIGNED-PAYLOAD,签名必须带真实哈希
+const EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
 
 export interface S3Options {
   endpoint: string
@@ -62,7 +64,10 @@ export class S3Backend implements BackupBackend {
   private readonly prefix: string
 
   private urlFor(key: string, query: { k: string; v: string }[]): { url: string; canonicalUri: string; host: string } {
-    const encKey = encodeKey(this.prefix ? `${this.prefix}/${key}` : key)
+    // key 为空 = 桶根操作(如 ListObjectsV2):prefix 只能进查询参数,
+    // 拼进路径会被当成取一个名字叫 'prefix/' 的对象(R2 实测 NoSuchKey)
+    const keyPath = key ? (this.prefix ? `${this.prefix}/${key}` : key) : ''
+    const encKey = encodeKey(keyPath)
     const { encoded } = canonicalQuery(query)
     if (this.opts.pathStyle) {
       const canonicalUri = `/${this.opts.bucket}/${encKey}`
@@ -74,8 +79,10 @@ export class S3Backend implements BackupBackend {
 
   private sign(method: string, canonicalUri: string, query: { k: string; v: string }[], host: string, payloadHash: string, headers: Record<string, string>): Record<string, string> {
     const now = new Date()
+    // SigV4 的 x-amz-date 必须是 UTC——用本地时间组件配 'Z' 后缀会凭空造出时差,
+    // R2 直接 RequestTimeTooSkewed 拒签(实测踩坑)
     const p = (n: number, w = 2) => String(n).padStart(w, '0')
-    const amzDate = `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}T${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}Z`
+    const amzDate = `${now.getUTCFullYear()}${p(now.getUTCMonth() + 1)}${p(now.getUTCDate())}T${p(now.getUTCHours())}${p(now.getUTCMinutes())}${p(now.getUTCSeconds())}Z`
     const dateStamp = amzDate.slice(0, 8)
     const region = this.opts.region
 
@@ -107,7 +114,7 @@ export class S3Backend implements BackupBackend {
     init?: { query?: { k: string; v: string }[]; body?: Buffer; headers?: Record<string, string>; payloadHash?: string; timeoutMs?: number },
   ): Promise<Response> {
     const { url, canonicalUri, host } = this.urlFor(key, init?.query ?? [])
-    const payloadHash = init?.payloadHash ?? (init?.body ? sha256HexBuf(init.body) : 'UNSIGNED-PAYLOAD')
+    const payloadHash = init?.payloadHash ?? (init?.body ? sha256HexBuf(init.body) : EMPTY_SHA256)
     const signed = this.sign(method, canonicalUri, init?.query ?? [], host, payloadHash, init?.headers ?? {})
     return fetch(url, {
       method,
@@ -120,6 +127,16 @@ export class S3Backend implements BackupBackend {
   private static async assertOk(res: Response, what: string): Promise<void> {
     if (res.status >= 200 && res.status < 300) return
     const text = await res.text().catch(() => '')
+    // 常见错误翻译成用户能行动的提示
+    if (/RequestTimeTooSkewed/i.test(text)) {
+      throw new Error(`${what}:本机时钟与服务器偏差过大(Windows 设置 → 时间和语言 → 立即同步),原始错误:${text.slice(0, 200)}`)
+    }
+    if (/SignatureDoesNotMatch/i.test(text)) {
+      throw new Error(`${what}:密钥不匹配(SecretAccessKey 有误),原始错误:${text.slice(0, 200)}`)
+    }
+    if (/InvalidAccessKeyId/i.test(text)) {
+      throw new Error(`${what}:AccessKeyId 不存在,原始错误:${text.slice(0, 200)}`)
+    }
     throw new Error(`S3 ${what} → ${res.status} ${text.slice(0, 300)}`)
   }
 
@@ -284,12 +301,14 @@ export class S3Backend implements BackupBackend {
   }
 
   async test(): Promise<string> {
-    const res = await this.request('HEAD', '', { timeoutMs: 30_000 })
-    if (res.status === 200) {
+    // 对象级探测(桶根 HEAD 对"仅对象读写"型令牌会 403):HEAD meta.json,
+    // 200=已初始化 / 404=连通但尚未初始化,都算成功
+    const res = await this.request('HEAD', 'meta.json', { timeoutMs: 30_000 })
+    if (res.status === 200 || res.status === 404) {
       return `S3 兼容端点可用:${this.opts.bucket} @ ${this.opts.endpoint}(region ${this.opts.region},${this.opts.pathStyle ? 'path-style' : 'virtual-host'})`
     }
     const detail = await res.text().catch(() => '')
-    throw new Error(`S3 HEAD bucket → ${res.status} ${detail.slice(0, 200)}`)
+    throw new Error(`S3 HEAD 对象 → ${res.status} ${detail.slice(0, 200)}`)
   }
 
   async probeLatency(): Promise<number | null> {

@@ -4,3 +4,4 @@ lib/
 npm-debug.log*
 .DS_Store
 Thumbs.db
+test-r2-manual.mjs  
