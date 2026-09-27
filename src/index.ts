@@ -61,6 +61,7 @@ export function apply(ctx: Context, config: unknown): void {
   const handlers = createRouteHandlers({ engine, getConfig })
   const routes: [string, (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => void | Promise<void>][] = [
     [`${ROUTE_PREFIX}/status`, handlers.statusHandler],
+    [`${ROUTE_PREFIX}/sessions`, handlers.sessionsHandler],
     [`${ROUTE_PREFIX}/snapshots`, handlers.snapshotsHandler],
     [`${ROUTE_PREFIX}/log`, handlers.logHandler],
     [`${ROUTE_PREFIX}/run`, handlers.runHandler],

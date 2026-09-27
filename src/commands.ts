@@ -2,7 +2,7 @@ import { access } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { BackupEngine, EngineStatus } from './core/engine.js'
 import { parseWorkspaces, type LikeZcodeConfig } from './config.js'
-import { resolveAgentCwd, type CommandDefinitionFace } from './types.js'
+import { resolveAgentCwd, resolveAgentSessionId, type CommandDefinitionFace } from './types.js'
 
 function bar(pct: number): string {
   const filled = Math.max(0, Math.min(10, Math.round(pct * 10)))
@@ -113,15 +113,17 @@ export function createBackupCommand(deps: CommandDeps): CommandDefinitionFace {
           const cwd = resolveAgentCwd(agent)
           if (!cwd) return { kind: 'error', text: '当前会话没有可用的工作目录(agent.session.cwd 缺失),请改用 /backup all 或 /backup <目录>。' }
           const root = await resolveWorkspaceRoot(cwd)
-          const started = await engine.start([root], 'manual')
+          const sessionId = resolveAgentSessionId(agent)
+          const started = await engine.start([root], 'manual', { sessionId })
           return {
             kind: 'success',
             text: [
               '🤫 已开始静默备份当前会话的工作区:',
               `  · 范围:${root}${root !== cwd ? `(由会话目录 ${cwd} 向上归一到仓库根)` : ''}`,
+              sessionId ? `  · 会话标记:${sessionId.slice(0, 8)}(快照与历史都会带上)` : '',
               '  · 进度看 设置 → 插件 → Like ZCode;本次运行结束后 /backup status 可查',
               `runId:${started.runId}`,
-            ].join('\n'),
+            ].filter(Boolean).join('\n'),
           }
         }
         // 目录直填:Windows 盘符或 Unix 绝对路径

@@ -61,3 +61,14 @@ export function resolveAgentCwd(agent: unknown): string | undefined {
   }
   return undefined
 }
+
+/** 从 agent 对象防御性解析 dsh 会话 id(解析不到返回 undefined)。 */
+export function resolveAgentSessionId(agent: unknown): string | undefined {
+  if (!agent || typeof agent !== 'object') return undefined
+  const session = (agent as { session?: unknown }).session
+  if (session && typeof session === 'object') {
+    const id = (session as { id?: unknown }).id
+    if (typeof id === 'string' && id.trim()) return id
+  }
+  return undefined
+}

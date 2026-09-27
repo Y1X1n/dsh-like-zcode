@@ -43,6 +43,8 @@ interface ActiveRun {
   runId: string
   roots: string[]
   trigger: 'manual' | 'auto'
+  /** 按会话备份时的会话标记(写入快照清单与历史)。 */
+  sessionId?: string
   abort: AbortController
   paused: boolean
   pauseWaiters: (() => void)[]
@@ -146,7 +148,7 @@ export class BackupEngine {
 
   // ── 手动/自动触发 ──────────────────────────────────────────────────────────
 
-  async start(roots: string[], trigger: 'manual' | 'auto' = 'manual'): Promise<{ runId: string; roots: string[] }> {
+  async start(roots: string[], trigger: 'manual' | 'auto' = 'manual', meta?: { sessionId?: string }): Promise<{ runId: string; roots: string[] }> {
     if (this.run) throw new Error('已有备份在进行中(去设置页看进度)')
     // 空清单兜底:调用方没给目录时回退到配置里的 workspaces
     const cfgNow = this.getConfig()
@@ -163,6 +165,7 @@ export class BackupEngine {
       runId,
       roots: valid,
       trigger,
+      sessionId: meta?.sessionId,
       abort: new AbortController(),
       paused: false,
       pauseWaiters: [],
@@ -367,6 +370,7 @@ export class BackupEngine {
       finishedAt: Date.now(),
       host: hostname(),
       enc: crypto !== null,
+      sessionId: run.sessionId,
       counts: {
         files: scan.files.length,
         bytes: scan.bytesTotal,
@@ -411,6 +415,7 @@ export class BackupEngine {
       skippedUnchanged: counts.skipped,
       errors: counts.errors,
       enc: crypto !== null,
+      sessionId: run.sessionId,
       cancelled: false,
     }
   }

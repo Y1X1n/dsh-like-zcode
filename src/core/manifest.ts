@@ -29,6 +29,8 @@ export interface SnapshotManifest {
   files: ManifestFile[]
   /** 本次运行中逐文件错误(截断至前 20 条)。 */
   fileErrors?: string[]
+  /** 触发备份的 dsh 会话 id(/backup here / 按会话备份时记录)。 */
+  sessionId?: string
 }
 
 /** 快照 id:YYYYMMDD-HHmmss(本地时区,人类可读;同秒冲突由引擎重试自增后缀)。 */

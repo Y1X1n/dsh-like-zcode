@@ -37,6 +37,8 @@ export interface HistoryEntry {
   errors: number
   enc: boolean
   cancelled: boolean
+  /** 触发备份的 dsh 会话 id(按会话备份时记录)。 */
+  sessionId?: string
 }
 
 export function emptyProgress(): RunProgress {

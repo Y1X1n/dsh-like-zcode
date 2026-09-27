@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { BackupEngine } from './core/engine.js'
 import { testBackendConfig } from './backends/index.js'
+import { findSession, listSessions } from './sessions.js'
 import { parseWorkspaces, resolveConfig, type LikeZcodeConfig } from './config.js'
 
 const MAX_BODY_BYTES = 256 * 1024
@@ -110,14 +111,37 @@ export function createRouteHandlers(deps: RouteDeps) {
     writeJson(res, 200, { ok: true, log: await engine.tailLog(lines) })
   }
 
+  async function sessionsHandler(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const sessions = listSessions().slice(0, 50).map((s) => ({
+      sessionId: s.sessionId,
+      workspace: s.workspace,
+      updatedAt: s.updatedAt,
+    }))
+    writeJson(res, 200, { ok: true, sessions })
+  }
+
   async function runHandler(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!assertTrustedOrigin(req, res)) return
     const body = await readJsonBody(req).catch(() => ({}) as Record<string, unknown>)
-    // 请求未指定目录时回退到配置清单;引擎侧对空清单还有第二道兜底
-    const dirs = Array.isArray(body.dirs) ? (body.dirs as unknown[]).map(String) : typeof body.dirs === 'string' ? [body.dirs] : []
-    const roots = dirs.length ? dirs : parseWorkspaces(getConfig().workspaces)
+    // 两种指定方式:dirs 直接给目录;sessionId 按会话备份(解析该会话的工作区,
+    // 快照与历史都会带上会话标记)。都缺省时回退到配置的 workspaces。
+    const sessionId = typeof body.sessionId === 'string' ? body.sessionId : ''
+    let roots: string[] = []
+    let meta: { sessionId?: string } | undefined
+    if (sessionId) {
+      const session = findSession(sessionId)
+      if (!session?.workspace) {
+        writeJson(res, 200, { ok: false, error: `找不到会话 ${sessionId.slice(0, 8)} 或其工作区在本机不存在(工作区目录已移动/删除的会话无法按会话备份)` })
+        return
+      }
+      roots = [session.workspace]
+      meta = { sessionId: session.sessionId }
+    } else {
+      const dirs = Array.isArray(body.dirs) ? (body.dirs as unknown[]).map(String) : typeof body.dirs === 'string' ? [body.dirs] : []
+      roots = dirs.length ? dirs : parseWorkspaces(getConfig().workspaces)
+    }
     try {
-      const started = await engine.start(roots, 'manual')
+      const started = await engine.start(roots, 'manual', meta)
       writeJson(res, 200, { ok: true, ...started })
     } catch (err) {
       writeJson(res, 200, { ok: false, error: err instanceof Error ? err.message : String(err) })
@@ -155,5 +179,5 @@ export function createRouteHandlers(deps: RouteDeps) {
     }
   }
 
-  return { statusHandler, snapshotsHandler, logHandler, runHandler, pauseHandler, resumeHandler, cancelHandler, testHandler }
+  return { statusHandler, sessionsHandler, snapshotsHandler, logHandler, runHandler, pauseHandler, resumeHandler, cancelHandler, testHandler }
 }

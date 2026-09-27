@@ -396,8 +396,26 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
     useSyncExternalStore((cb) => controller.subscribe(cb), () => controller.getSnapshot())
     const value = scope.getSnapshot().value ?? {}
     const { status, history, error, busy, testResult } = controller.getSnapshot()
-    const [runScope, setRunScope] = useState<'all' | 'dir'>('all')
+    const [runScope, setRunScope] = useState<'all' | 'dir' | 'session'>('all')
     const [runDir, setRunDir] = useState('')
+    const [sessionsList, setSessionsList] = useState<import('./controller.js').SessionInfoLike[]>([])
+    const [sessionsLoading, setSessionsLoading] = useState(false)
+    const [selectedSessionId, setSelectedSessionId] = useState('')
+    const loadSessions = () => {
+      setSessionsLoading(true)
+      void controller.actions
+        .listSessions()
+        .then((list) => {
+          const usable = list.filter((s) => s.workspace)
+          setSessionsList(usable)
+          setSelectedSessionId((prev) => (prev && usable.some((s) => s.sessionId === prev) ? prev : (usable[0]?.sessionId ?? '')))
+        })
+        .finally(() => setSessionsLoading(false))
+    }
+    const changeRunScope = (next: 'all' | 'dir' | 'session') => {
+      setRunScope(next)
+      if (next === 'session' && sessionsList.length === 0) loadSessions()
+    }
     const [cardOpen, setCardOpen] = useState<boolean>(readCardOpen)
     const [preset, setPreset] = useState<string>('custom')
     const toggleCard = () => {
@@ -481,11 +499,33 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
               <select
                 style={styles.select}
                 value={runScope}
-                onChange={(e) => setRunScope(e.target.value === 'dir' ? 'dir' : 'all')}
+                onChange={(e) => {
+                  const next = e.target.value
+                  changeRunScope(next === 'dir' ? 'dir' : next === 'session' ? 'session' : 'all')
+                }}
               >
                 <option value="all">全部配置目录</option>
+                <option value="session">按会话(工作区)</option>
                 <option value="dir">指定目录(本次)</option>
               </select>
+              {runScope === 'session' &&
+                (sessionsLoading ? (
+                  <span style={styles.hint}>会话列表加载中…</span>
+                ) : sessionsList.length === 0 ? (
+                  <span style={styles.hint}>没有找到带有效工作区的会话</span>
+                ) : (
+                  <select
+                    style={styles.select}
+                    value={selectedSessionId}
+                    onChange={(e) => setSelectedSessionId(e.target.value)}
+                  >
+                    {sessionsList.map((s) => (
+                      <option key={s.sessionId} value={s.sessionId}>
+                        {(s.workspace ?? '').split('\\').pop()} · {s.sessionId.slice(0, 8)} · {new Date(s.updatedAt).toLocaleString()}
+                      </option>
+                    ))}
+                  </select>
+                ))}
               {runScope === 'dir' && (
                 <input
                   style={styles.input}
@@ -498,8 +538,16 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
             <div style={styles.row}>
               <button
                 style={styles.btn}
-                disabled={busy || running || (runScope === 'dir' && !runDir.trim())}
-                onClick={() => void controller.actions.run(runScope === 'dir' && runDir.trim() ? [runDir.trim()] : undefined)}
+                disabled={busy || running || (runScope === 'dir' && !runDir.trim()) || (runScope === 'session' && !selectedSessionId)}
+                onClick={() =>
+                  void controller.actions.run(
+                    runScope === 'dir' && runDir.trim()
+                      ? { dirs: [runDir.trim()] }
+                      : runScope === 'session' && selectedSessionId
+                        ? { sessionId: selectedSessionId }
+                        : undefined,
+                  )
+                }
               >
                 立即备份
               </button>
@@ -530,7 +578,10 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
                 最近快照:
                 {history
                   .slice(0, 3)
-                  .map((h) => `${h.id}(${h.files} 文件 / 实传 ${humanBytes(h.uploadedBytes)}${h.enc ? ' · 加密' : ''}${h.cancelled ? ' · 取消' : ''})`)
+                  .map(
+                    (h) =>
+                      `${h.id}${h.sessionId ? '(会话 ' + h.sessionId.slice(0, 8) + ')' : ''}(${h.files} 文件 / 实传 ${humanBytes(h.uploadedBytes)}${h.enc ? ' · 加密' : ''}${h.cancelled ? ' · 取消' : ''})`,
+                  )
                   .join(' · ')}
               </div>
             )}

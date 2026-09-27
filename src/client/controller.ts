@@ -47,6 +47,13 @@ export interface HistoryEntryLike {
   uploadedBytes: number
   enc: boolean
   cancelled: boolean
+  sessionId?: string
+}
+
+export interface SessionInfoLike {
+  sessionId: string
+  workspace: string | null
+  updatedAt: number
 }
 
 export interface StatusControllerState {
@@ -70,11 +77,13 @@ export interface StatusController {
     stopPolling(): void
     /** 立即刷新一次(不等下一跳)。 */
     refresh(): Promise<void>
-    run(dirs?: string[]): Promise<void>
+    /** dirs / sessionId 二选一;都不传 = 按配置的全部目录。 */
+    run(opts?: { dirs?: string[]; sessionId?: string }): Promise<void>
     pause(): Promise<void>
     resume(): Promise<void>
     cancel(): Promise<void>
     test(config: Record<string, unknown>): Promise<void>
+    listSessions(): Promise<SessionInfoLike[]>
     clearTest(): void
   }
 }
@@ -162,9 +171,10 @@ export function createStatusController(): StatusController {
       startPolling,
       stopPolling,
       refresh,
-      run: (dirs) =>
+      run: (opts) =>
         action(async () => {
-          const res = await post('/dsh-like-zcode/run', dirs?.length ? { dirs } : {})
+          const body = opts?.sessionId ? { sessionId: opts.sessionId } : opts?.dirs?.length ? { dirs: opts.dirs } : {}
+          const res = await post('/dsh-like-zcode/run', body)
           if (!res.ok) set({ testResult: { ok: false, text: res.error ?? '启动失败' } })
         }),
       pause: () =>
@@ -184,6 +194,12 @@ export function createStatusController(): StatusController {
           const res = await post('/dsh-like-zcode/test', config)
           set({ testResult: { ok: res.ok, text: res.ok ? res.message ?? '连接成功' : res.error ?? '连接失败' } })
         }),
+      listSessions: async () => {
+        const res = await fetch('/dsh-like-zcode/sessions', { headers: { accept: 'application/json' } })
+        const body = (await res.json().catch(() => null)) as { ok?: boolean; sessions?: SessionInfoLike[] } | null
+        if (!res.ok || !body?.ok || !Array.isArray(body.sessions)) return []
+        return body.sessions
+      },
       clearTest: () => set({ testResult: null }),
     },
   }
