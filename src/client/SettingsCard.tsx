@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { StatusController } from './controller.js'
 
 /** 设置面(settingsScope.bind 的保守子集;值可能缺字段,全部按 Partial 处理)。 */
@@ -144,104 +144,6 @@ const styles = {
   } as const,
 }
 
-// ── 服务商预设:选厂商 → 自动填 endpoint/region/寻址等通用字段 ────────────────
-// 只填"公共已知"部分;Bucket/密钥/账号永远是用户自己的事。
-
-interface ProviderPreset {
-  label: string
-  fields: Partial<LikeZcodeSettingsValue>
-  hint: string
-}
-
-const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
-  aliyun: {
-    label: '阿里云 OSS',
-    fields: {
-      backend: 's3',
-      s3Endpoint: 'https://oss-cn-hangzhou.aliyuncs.com',
-      s3Region: 'oss-cn-hangzhou',
-      s3PathStyle: true,
-    },
-    hint: '地域按你的 Bucket 调整(如 oss-cn-beijing);ECS 同地域可用内网端点 oss-cn-xxx-internal.aliyuncs.com 免流量费。',
-  },
-  tencent: {
-    label: '腾讯云 COS',
-    fields: {
-      backend: 's3',
-      s3Endpoint: 'https://cos.ap-beijing.myqcloud.com',
-      s3Region: 'ap-beijing',
-      s3PathStyle: true,
-    },
-    hint: '地域按你的存储桶调整(如 ap-guangzhou);同地域云主机可换内网端点 cos.ap-xxx-internal.myqcloud.com。',
-  },
-  huawei: {
-    label: '华为云 OBS',
-    fields: {
-      backend: 's3',
-      s3Endpoint: 'https://obs.cn-north-4.myhuaweicloud.com',
-      s3Region: 'cn-north-4',
-      s3PathStyle: true,
-    },
-    hint: '地域按你的桶调整;密钥在控制台"我的凭证"里创建。',
-  },
-  jdcloud: {
-    label: '京东云 OSS',
-    fields: {
-      backend: 's3',
-      s3Endpoint: 'https://s3.cn-north-1.jdcloud-oss.com',
-      s3Region: 'cn-north-1',
-      s3PathStyle: true,
-    },
-    hint: '以京东云控制台展示的 S3 兼容 Endpoint 为准,预设仅供参考。',
-  },
-  r2: {
-    label: 'Cloudflare R2',
-    fields: {
-      backend: 's3',
-      s3Endpoint: 'https://<账户ID>.r2.cloudflarestorage.com',
-      s3Region: 'auto',
-      s3PathStyle: true,
-    },
-    hint: '把 <账户ID> 换成 R2 控制台右侧的账户 ID;需先创建 Object Read & Write 权限的 API Token。',
-  },
-  jianguoyun: {
-    label: '坚果云',
-    fields: {
-      backend: 'webdav',
-      webdavUrl: 'https://dav.jianguoyun.com/dav/',
-    },
-    hint: '用户名=注册邮箱,密码=应用密码(网页版 → 账户信息 → 安全选项);免费版流量配额较小。',
-  },
-  synology: {
-    label: '群晖 DSM',
-    fields: {
-      backend: 'webdav',
-      webdavUrl: 'http://NAS局域网IP:5005',
-    },
-    hint: '先在套件中心安装 WebDAV Server 并启用 5005(HTTP)/5006(HTTPS);建议为备份单开一个受限账号。',
-  },
-  ecs: {
-    label: 'ECS 自建(like-zdav.py)',
-    fields: {
-      backend: 'webdav',
-      webdavUrl: 'http://ECS公网IP:8060',
-    },
-    hint: '先在服务器上跑 server/like-zdav.py(两条命令,见 docs/BACKENDS.md),密码填启动时的 --token。',
-  },
-}
-
-const CARD_OPEN_KEY = 'lz-card-open'
-
-function readCardOpen(): boolean {
-  try {
-    const raw = localStorage.getItem(CARD_OPEN_KEY)
-    if (raw === null) return true
-    return raw === '1'
-  } catch {
-    return true
-  }
-}
-
 const PHASE_TEXT: Record<string, string> = {
   idle: '空闲',
   scanning: '扫描中',
@@ -311,6 +213,183 @@ function CollapsibleGroup(props: { groupKey: string; title: string; defaultOpen?
   )
 }
 
+// ── 草稿输入框:输入时写本地草稿(不受状态轮询重渲染影响),失焦才提交配置 ────
+// 之前的版本是"受控 value + 只在 onBlur 提交、无 onChange",卡片每 1.5s 轮询
+// 重渲染一次,用户敲的每个字都会被下一轮渲染冲掉——等于什么都输不进去。
+
+interface DraftFieldProps {
+  value?: string
+  placeholder?: string
+  onCommit(value: string): void
+  password?: boolean
+  multiline?: boolean
+  numeric?: boolean
+}
+
+function DraftField(props: DraftFieldProps) {
+  const [draft, setDraft] = useState(props.value ?? '')
+  const focused = useRef(false)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const draftRef = useRef(draft)
+  draftRef.current = draft
+  useEffect(() => {
+    // 非聚焦时同步外部值(预设填充/其他端修改);聚焦中绝不覆盖用户输入
+    if (!focused.current) setDraft(props.value ?? '')
+  }, [props.value])
+  const doCommit = () => {
+    const v = draftRef.current
+    if (props.numeric) {
+      const parsed = Number.parseInt(v, 10)
+      if (Number.isFinite(parsed)) props.onCommit(String(parsed))
+    } else {
+      props.onCommit(v)
+    }
+  }
+  const scheduleCommit = () => {
+    // 宿主弹窗层会吞掉 focusout(实测 blur 不回传),所以不能依赖失焦提交:
+    // 变更后 700ms 防抖自动保存;blur 作为立即提交的补充,能触发就提前保存。
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = setTimeout(() => {
+      timer.current = null
+      doCommit()
+    }, 700)
+  }
+  const flushCommit = () => {
+    focused.current = false
+    if (timer.current) {
+      clearTimeout(timer.current)
+      timer.current = null
+      doCommit()
+    }
+  }
+  const shared = {
+    style: props.multiline ? styles.area : styles.input,
+    placeholder: props.placeholder,
+    value: draft,
+    onFocus: () => {
+      focused.current = true
+    },
+    onChange: (e: { target: { value: string } }) => {
+      const next = e.target.value
+      setDraft(next)
+      draftRef.current = next
+      focused.current = true
+      scheduleCommit()
+    },
+    onBlur: flushCommit,
+  }
+  // 卸载兜底:还有未落盘的草稿就立刻提交
+  useEffect(
+    () => () => {
+      if (timer.current) {
+        clearTimeout(timer.current)
+        doCommit()
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
+  if (props.multiline) return <textarea {...shared} />
+  return <input type={props.password ? 'password' : 'text'} {...shared} />
+}
+
+// ── 服务商预设:选厂商 → 自动填 endpoint/region/寻址等通用字段 ────────────────
+
+interface ProviderPreset {
+  label: string
+  fields: Partial<LikeZcodeSettingsValue>
+  hint: string
+}
+
+const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
+  aliyun: {
+    label: '阿里云 OSS',
+    fields: {
+      backend: 's3',
+      s3Endpoint: 'https://oss-cn-hangzhou.aliyuncs.com',
+      s3Region: 'oss-cn-hangzhou',
+      s3PathStyle: true,
+    },
+    hint: '地域按你的 Bucket 调整(如 oss-cn-beijing);ECS 同地域可用内网端点 oss-cn-xxx-internal.aliyuncs.com 免流量费。',
+  },
+  tencent: {
+    label: '腾讯云 COS',
+    fields: {
+      backend: 's3',
+      s3Endpoint: 'https://cos.ap-beijing.myqcloud.com',
+      s3Region: 'ap-beijing',
+      s3PathStyle: true,
+    },
+    hint: '地域按你的存储桶调整(如 ap-guangzhou);同地域云主机可换内网端点 cos.ap-xxx-internal.myqcloud.com。',
+  },
+  huawei: {
+    label: '华为云 OBS',
+    fields: {
+      backend: 's3',
+      s3Endpoint: 'https://obs.cn-north-4.myhuaweicloud.com',
+      s3Region: 'cn-north-4',
+      s3PathStyle: true,
+    },
+    hint: '地域按你的桶调整;密钥在控制台"我的凭证"里创建。',
+  },
+  jdcloud: {
+    label: '京东云 OSS',
+    fields: {
+      backend: 's3',
+      s3Endpoint: 'https://s3.cn-north-1.jdcloud-oss.com',
+      s3Region: 'cn-north-1',
+      s3PathStyle: true,
+    },
+    hint: '以京东云控制台展示的 S3 兼容 Endpoint 为准,预设仅供参考。',
+  },
+  r2: {
+    label: 'Cloudflare R2',
+    fields: {
+      backend: 's3',
+      s3Endpoint: 'https://<账户ID>.r2.cloudflarestorage.com',
+      s3Region: 'auto',
+      s3PathStyle: true,
+    },
+    hint: 'Endpoint 里的 <账户ID> 换成 R2 概览页右侧的账户 ID;Bucket=控制台建的桶名;AccessKeyId/SecretAccessKey 在"管理 R2 API 令牌"创建(Object Read & Write,只授该桶),Secret 只显示一次。',
+  },
+  jianguoyun: {
+    label: '坚果云',
+    fields: {
+      backend: 'webdav',
+      webdavUrl: 'https://dav.jianguoyun.com/dav/',
+    },
+    hint: '用户名=注册邮箱,密码=应用密码(网页版 → 账户信息 → 安全选项);免费版流量配额较小。',
+  },
+  synology: {
+    label: '群晖 DSM',
+    fields: {
+      backend: 'webdav',
+      webdavUrl: 'http://NAS局域网IP:5005',
+    },
+    hint: '先在套件中心安装 WebDAV Server 并启用 5005(HTTP)/5006(HTTPS);建议为备份单开一个受限账号。',
+  },
+  ecs: {
+    label: 'ECS 自建(like-zdav.py)',
+    fields: {
+      backend: 'webdav',
+      webdavUrl: 'http://ECS公网IP:8060',
+    },
+    hint: '先在服务器上跑 server/like-zdav.py(两条命令,见 docs/BACKENDS.md),密码填启动时的 --token。',
+  },
+}
+
+const CARD_OPEN_KEY = 'lz-card-open'
+
+function readCardOpen(): boolean {
+  try {
+    const raw = localStorage.getItem(CARD_OPEN_KEY)
+    if (raw === null) return true
+    return raw === '1'
+  } catch {
+    return true
+  }
+}
+
 export function createSettingsCard(scope: BoundSettingsScope, controller: StatusController) {
   return function LikeZcodeSettingsCard() {
     useSyncExternalStore((cb) => scope.subscribe(cb), () => scope.getSnapshot())
@@ -339,18 +418,17 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
         void scope.set(field as keyof LikeZcodeSettingsValue, fieldValue as never)
       }
     }
-
     const setBool = (key: 'enabled' | 'includeGit' | 'respectGitignore' | 's3PathStyle' | 'encryptionEnabled') =>
       (e: { target: { checked: boolean } }) => {
         void scope.set(key, e.target.checked)
       }
     const setText = (key: 'workspaces' | 'excludePatterns' | 'localDir' | 'webdavUrl' | 'webdavUsername' | 'webdavPassword' | 's3Endpoint' | 's3Region' | 's3Bucket' | 's3AccessKeyId' | 's3SecretAccessKey' | 'passphrase' | 'remotePrefix' | 'backend' | 'scheduleMode') =>
-      (e: { target: { value: string } }) => {
-        void scope.set(key, e.target.value)
+      (v: string) => {
+        void scope.set(key, v)
       }
     const setNumber = (key: 'maxFileMB' | 'maxUploadKBps' | 'concurrency' | 'intervalHours' | 'windowStart' | 'windowEnd' | 'retentionRuns') =>
-      (e: { target: { value: string } }) => {
-        const n = Number.parseInt(e.target.value, 10)
+      (v: string) => {
+        const n = Number.parseInt(v, 10)
         if (Number.isFinite(n)) void scope.set(key, n)
       }
 
@@ -464,11 +542,11 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
 
         <CollapsibleGroup groupKey="content" title="备份内容" defaultOpen>
           <div style={styles.row}>
-            <textarea
-              style={styles.area}
+            <DraftField
+              multiline
               value={value.workspaces ?? ''}
               placeholder={'E:\\work\\project-a\nE:\\work\\project-b(每行一个绝对路径)'}
-              onBlur={setText('workspaces')}
+              onCommit={setText('workspaces')}
             />
           </div>
           <div style={styles.row}>
@@ -481,14 +559,14 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
               <span style={styles.label}>尊重 .gitignore</span>
             </label>
             <span style={styles.label}>单文件上限(MB)</span>
-            <input style={styles.input} value={String(value.maxFileMB ?? 512)} onBlur={setNumber('maxFileMB')} />
+            <DraftField numeric value={String(value.maxFileMB ?? 512)} onCommit={setNumber('maxFileMB')} />
           </div>
           <div style={styles.row}>
-            <textarea
-              style={styles.area}
+            <DraftField
+              multiline
               value={value.excludePatterns ?? ''}
               placeholder={'额外排除 pattern(每行一个,gitignore 风格;node_modules 等默认已排除,可用 ! 反选救回)'}
-              onBlur={setText('excludePatterns')}
+              onCommit={setText('excludePatterns')}
             />
           </div>
         </CollapsibleGroup>
@@ -518,31 +596,31 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
           )}
           <div style={styles.row}>
             <span style={styles.label}>类型</span>
-            <select style={styles.select} value={backend} onChange={setText('backend')}>
+            <select style={styles.select} value={backend} onChange={(e) => setText('backend')(e.target.value)}>
               <option value="localdir">localdir(本地盘 / NAS 映射盘)</option>
               <option value="webdav">WebDAV(群晖/威联通/坚果云/Nextcloud)</option>
               <option value="s3">S3 兼容(阿里云OSS/腾讯COS/R2/B2/MinIO…)</option>
             </select>
             <span style={styles.label}>路径前缀</span>
-            <input style={styles.input} value={value.remotePrefix ?? 'dsh-like-zcode'} onBlur={setText('remotePrefix')} />
+            <DraftField value={value.remotePrefix ?? 'dsh-like-zcode'} onCommit={setText('remotePrefix')} />
           </div>
           {backend === 'localdir' && (
             <div style={styles.row}>
               <span style={styles.label}>目录</span>
-              <input style={styles.input} value={value.localDir ?? ''} placeholder="如 E:\\backups 或 NAS 映射盘 Z:\\backups" onBlur={setText('localDir')} />
+              <DraftField value={value.localDir ?? ''} placeholder="如 E:\\backups 或 NAS 映射盘 Z:\\backups" onCommit={setText('localDir')} />
             </div>
           )}
           {backend === 'webdav' && (
             <>
               <div style={styles.row}>
                 <span style={styles.label}>地址</span>
-                <input style={styles.input} value={value.webdavUrl ?? ''} placeholder="http://nas:5005 或 https://dav.jianguoyun.com/dav/" onBlur={setText('webdavUrl')} />
+                <DraftField value={value.webdavUrl ?? ''} placeholder="http://nas:5005 或 https://dav.jianguoyun.com/dav/" onCommit={setText('webdavUrl')} />
               </div>
               <div style={styles.row}>
                 <span style={styles.label}>用户名</span>
-                <input style={styles.input} value={value.webdavUsername ?? ''} onBlur={setText('webdavUsername')} />
+                <DraftField value={value.webdavUsername ?? ''} onCommit={setText('webdavUsername')} />
                 <span style={styles.label}>密码</span>
-                <input type="password" style={styles.input} value={value.webdavPassword ?? ''} placeholder={'坚果云请用"应用密码"'} onBlur={setText('webdavPassword')} />
+                <DraftField password value={value.webdavPassword ?? ''} placeholder={'坚果云请用"应用密码"'} onCommit={setText('webdavPassword')} />
               </div>
             </>
           )}
@@ -550,17 +628,17 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
             <>
               <div style={styles.row}>
                 <span style={styles.label}>Endpoint</span>
-                <input style={styles.input} value={value.s3Endpoint ?? ''} placeholder="https://oss-cn-hangzhou.aliyuncs.com" onBlur={setText('s3Endpoint')} />
+                <DraftField value={value.s3Endpoint ?? ''} placeholder="https://oss-cn-hangzhou.aliyuncs.com" onCommit={setText('s3Endpoint')} />
                 <span style={styles.label}>Region</span>
-                <input style={styles.input} value={value.s3Region ?? ''} placeholder="oss-cn-hangzhou / ap-beijing / auto" onBlur={setText('s3Region')} />
+                <DraftField value={value.s3Region ?? ''} placeholder="oss-cn-hangzhou / ap-beijing / auto" onCommit={setText('s3Region')} />
               </div>
               <div style={styles.row}>
                 <span style={styles.label}>Bucket</span>
-                <input style={styles.input} value={value.s3Bucket ?? ''} onBlur={setText('s3Bucket')} />
+                <DraftField value={value.s3Bucket ?? ''} onCommit={setText('s3Bucket')} />
                 <span style={styles.label}>AccessKeyId</span>
-                <input style={styles.input} value={value.s3AccessKeyId ?? ''} onBlur={setText('s3AccessKeyId')} />
+                <DraftField value={value.s3AccessKeyId ?? ''} onCommit={setText('s3AccessKeyId')} />
                 <span style={styles.label}>SecretKey</span>
-                <input type="password" style={styles.input} value={value.s3SecretAccessKey ?? ''} onBlur={setText('s3SecretAccessKey')} />
+                <DraftField password value={value.s3SecretAccessKey ?? ''} onCommit={setText('s3SecretAccessKey')} />
               </div>
               <div style={styles.row}>
                 <label style={styles.row}>
@@ -575,11 +653,11 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
         <CollapsibleGroup groupKey="schedule" title="限速与计划(不影响你正常上网)">
           <div style={styles.row}>
             <span style={styles.label}>限速(KB/s)</span>
-            <input style={styles.input} value={String(value.maxUploadKBps ?? 4096)} onBlur={setNumber('maxUploadKBps')} />
+            <DraftField numeric value={String(value.maxUploadKBps ?? 4096)} onCommit={setNumber('maxUploadKBps')} />
             <span style={styles.label}>并发</span>
-            <input style={styles.input} value={String(value.concurrency ?? 2)} onBlur={setNumber('concurrency')} />
+            <DraftField numeric value={String(value.concurrency ?? 2)} onCommit={setNumber('concurrency')} />
             <span style={styles.label}>模式</span>
-            <select style={styles.select} value={value.scheduleMode ?? 'manual'} onChange={setText('scheduleMode')}>
+            <select style={styles.select} value={value.scheduleMode ?? 'manual'} onChange={(e) => setText('scheduleMode')(e.target.value)}>
               <option value="manual">手动(只按"立即备份")</option>
               <option value="interval">按间隔自动</option>
               <option value="window">夜间窗口自动</option>
@@ -588,11 +666,11 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
           {(value.scheduleMode ?? 'manual') !== 'manual' && (
             <div style={styles.row}>
               <span style={styles.label}>间隔(小时)</span>
-              <input style={styles.input} value={String(value.intervalHours ?? 24)} onBlur={setNumber('intervalHours')} />
+              <DraftField numeric value={String(value.intervalHours ?? 24)} onCommit={setNumber('intervalHours')} />
               <span style={styles.label}>窗口起(时)</span>
-              <input style={styles.input} value={String(value.windowStart ?? 2)} onBlur={setNumber('windowStart')} />
+              <DraftField numeric value={String(value.windowStart ?? 2)} onCommit={setNumber('windowStart')} />
               <span style={styles.label}>窗口止(时)</span>
-              <input style={styles.input} value={String(value.windowEnd ?? 7)} onBlur={setNumber('windowEnd')} />
+              <DraftField numeric value={String(value.windowEnd ?? 7)} onCommit={setNumber('windowEnd')} />
             </div>
           )}
         </CollapsibleGroup>
@@ -603,9 +681,9 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
               <input type="checkbox" checked={value.encryptionEnabled === true} onChange={setBool('encryptionEnabled')} />
               <span style={styles.label}>端到端加密(AES-256-GCM)</span>
             </label>
-            <input type="password" style={styles.input} value={value.passphrase ?? ''} placeholder="加密口令(丢失无法找回)" onBlur={setText('passphrase')} />
+            <DraftField password value={value.passphrase ?? ''} placeholder="加密口令(丢失无法找回)" onCommit={setText('passphrase')} />
             <span style={styles.label}>保留快照份数</span>
-            <input style={styles.input} value={String(value.retentionRuns ?? 30)} onBlur={setNumber('retentionRuns')} />
+            <DraftField numeric value={String(value.retentionRuns ?? 30)} onCommit={setNumber('retentionRuns')} />
           </div>
           <div style={styles.hint}>开启加密后建议同时更换路径前缀(旧的前缀里可能有未加密的明文块)。</div>
         </CollapsibleGroup>
