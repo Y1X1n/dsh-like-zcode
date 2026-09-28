@@ -168,19 +168,25 @@ export class S3Backend implements BackupBackend {
   }
 
   async putBlob(hash: string, filePath: string, size: number): Promise<void> {
+    await this.putObject(`blobs/${hash.slice(0, 2)}/${hash}`, filePath, size)
+  }
+
+  async putObject(relKey: string, filePath: string, size: number): Promise<void> {
+    // 注意:request→urlFor 内部会补 prefix,这里绝不能再拼一遍(否则前缀翻倍,R2 实测踩坑)
+    const key = relKey
     if (size <= MULTIPART_THRESHOLD) {
       const body = await readFile(filePath)
       await S3Backend.assertOk(
-        await this.request('PUT', this.blobKey(hash), {
+        await this.request('PUT', key, {
           body,
           headers: { 'content-type': 'application/octet-stream' },
           timeoutMs: 600_000,
         }),
-        `PUT blob ${hash.slice(0, 8)}`,
+        `PUT ${relKey.slice(0, 40)}`,
       )
       return
     }
-    await this.uploadMultipart(this.blobKey(hash), filePath, size)
+    await this.uploadMultipart(key, filePath, size)
   }
 
   /** multipart:>32MB 的大块(典型:.git packfile),16MB 分片,峰值内存 ~2×16MB。 */

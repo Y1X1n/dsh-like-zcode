@@ -15,9 +15,12 @@ export class LocalDirBackend implements BackupBackend {
     this.base = join(dir, prefix)
   }
 
-  async init(): Promise<void> {
-    await mkdir(join(this.base, 'blobs'), { recursive: true })
-    await mkdir(join(this.base, 'snapshots'), { recursive: true })
+  async init(layout: 'snapshot' | 'mirror' = 'snapshot'): Promise<void> {
+    await mkdir(this.base, { recursive: true })
+    if (layout === 'snapshot') {
+      await mkdir(join(this.base, 'blobs'), { recursive: true })
+      await mkdir(join(this.base, 'snapshots'), { recursive: true })
+    }
     await writeFile(
       join(this.base, 'meta.json'),
       JSON.stringify({
@@ -49,7 +52,12 @@ export class LocalDirBackend implements BackupBackend {
 
   async putBlob(hash: string, filePath: string, size: number): Promise<void> {
     void size
-    const dest = this.blobPath(hash)
+    await this.putObject(`blobs/${hash.slice(0, 2)}/${hash}`, filePath, size)
+  }
+
+  async putObject(relKey: string, filePath: string, size: number): Promise<void> {
+    void size
+    const dest = join(this.base, ...relKey.split('/'))
     await mkdir(dirname(dest), { recursive: true })
     const tmp = `${dest}.tmp-${Date.now()}`
     await copyFile(filePath, tmp)

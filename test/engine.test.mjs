@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { existsSync } from 'node:fs'
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -146,6 +147,32 @@ test('引擎:保留策略清理超份数旧清单', async () => {
     const snapshotDir = join(dest, 'dsh-like-zcode', workspaceSlug(src), 'snapshots')
     const names = await readdir(snapshotDir)
     assert.ok(names.length <= 3, `保留 3 份,实际 ${names.length}`)
+  } finally {
+    engine.stop()
+    await rm(src, { recursive: true, force: true })
+    await rm(dest, { recursive: true, force: true })
+    await rm(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('引擎端到端:源码镜像模式(原始路径直存,无快照清单)', async () => {
+  const { src, dest, stateDir } = await makeFixture()
+  const cfg = resolveConfig({ enabled: true, workspaces: src, backend: 'localdir', localDir: dest, storageLayout: 'mirror', maxUploadKBps: 65536 })
+  const engine = new BackupEngine(() => cfg, stateDir)
+  try {
+    await engine.start([src], 'manual')
+    assert.equal(await waitForPhase(engine, ['done']), 'done')
+    const prefix = join(dest, 'dsh-like-zcode', workspaceSlug(src))
+    assert.equal(await readFile(join(prefix, 'a.txt'), 'utf-8'), 'hello like-zcode\n')
+    assert.equal(await readFile(join(prefix, 'sub', 'b.txt'), 'utf-8'), 'nested file '.repeat(200))
+    assert.ok(!existsSync(join(prefix, 'node_modules')), 'node_modules 不镜像')
+    assert.ok(!existsSync(join(prefix, 'snapshots')), '镜像模式无快照清单')
+    assert.ok(existsSync(join(prefix, '.git', 'HEAD')), '.git 历史照常镜像')
+    await engine.start([src], 'manual')
+    assert.equal(await waitForPhase(engine, ['done']), 'done')
+    const run2 = engine.history()[0]
+    assert.equal(run2.skippedUnchanged, 3)
+    assert.equal(run2.uploaded, 0, '未变更文件零上传')
   } finally {
     engine.stop()
     await rm(src, { recursive: true, force: true })

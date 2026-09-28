@@ -8,12 +8,14 @@ export interface RemoteEntry {
 
 export interface BackupBackend {
   kind: BackendKind
-  /** 建目录骨架 / 写 meta.json(幂等)。 */
-  init(): Promise<void>
+  /** 建目录骨架 / 写 meta.json(幂等)。mirror 布局只写标记,不建 blobs/snapshots。 */
+  init(layout?: 'snapshot' | 'mirror'): Promise<void>
   /** 内容块是否存在(按明文内容哈希寻址)。 */
   hasBlob(hash: string): Promise<boolean>
   /** 上传内容块:filePath 是已变换(gzip[+加密])的暂存文件。 */
   putBlob(hash: string, filePath: string, size: number): Promise<void>
+  /** 源码镜像模式:按原始相对路径('/' 分隔)原样存储文件。 */
+  putObject(relKey: string, filePath: string, size: number): Promise<void>
   /** 读取内容块(还原/测试用;仅限小块)。 */
   getBlob(hash: string): Promise<Buffer>
   putManifest(id: string, data: Buffer): Promise<void>

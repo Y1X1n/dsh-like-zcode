@@ -1,9 +1,9 @@
 import { hostname } from 'node:os'
-import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
-import { normalizeBackend, normalizeScheduleMode, parseWorkspaces, type LikeZcodeConfig } from '../config.js'
+import { normalizeBackend, normalizeLayout, normalizeScheduleMode, parseWorkspaces, type LikeZcodeConfig } from '../config.js'
 import { createBackend } from '../backends/index.js'
 import type { BackupBackend } from '../backends/types.js'
 import { workspaceSlug } from '../sessions.js'
@@ -63,13 +63,14 @@ function pickMeme(phase: string): string {
   return pool[Math.floor(Date.now() / 60_000) % pool.length] ?? ''
 }
 
-/** 后端身份(去重索引/密钥元数据按它分文件):kind + 目标 + 前缀 + 工作区 slug。 */
+/** 后端身份(去重索引/密钥元数据按它分文件):kind + 目标 + 前缀 + 布局 + 工作区 slug。 */
 export function backendKeyFor(cfg: LikeZcodeConfig, slug?: string): string {
   const kind = normalizeBackend(cfg.backend)
   const dest =
     kind === 'localdir' ? cfg.localDir : kind === 'webdav' ? cfg.webdavUrl : `${cfg.s3Endpoint}|${cfg.s3Bucket}|${cfg.s3Region}`
   const prefix = `${cfg.remotePrefix}${slug ? `/${slug}` : ''}`
-  return createHash('sha256').update(`${kind}|${dest.trim().toLowerCase()}|${prefix}`).digest('hex').slice(0, 16)
+  const layout = normalizeLayout(cfg.storageLayout)
+  return createHash('sha256').update(`${kind}|${dest.trim().toLowerCase()}|${prefix}|${layout}`).digest('hex').slice(0, 16)
 }
 
 export class BackupEngine {
@@ -286,8 +287,9 @@ export class BackupEngine {
   ): Promise<HistoryEntry | null> {
     const slug = workspaceSlug(root)
     const backend = createBackend(cfg, slug)
-    await backend.init()
-    const crypto = await this.ensureCrypto(backend, cfg, slug)
+    const mirror = normalizeLayout(cfg.storageLayout) === 'mirror'
+    await backend.init(mirror ? 'mirror' : 'snapshot')
+    const crypto = mirror ? null : await this.ensureCrypto(backend, cfg, slug)
     await this.loadKnown(backendKeyFor(cfg, slug))
     const startedAt = Date.now()
     run.progress.phase = 'scanning'
@@ -360,6 +362,35 @@ export class BackupEngine {
     clearInterval(probeTimer)
     await rm(stagingDir, { recursive: true, force: true })
     if (run.abort.signal.aborted) return null
+
+    // 源码镜像模式:不写快照清单/保留策略/加密,历史只留一条运行记录
+    if (mirror) {
+      totals.files += scan.files.length
+      totals.bytes += scan.bytesTotal
+      totals.uploaded += counts.uploaded
+      totals.uploadedBytes += counts.uploadedBytes
+      totals.skipped += counts.skipped
+      totals.tooBig += counts.tooBig
+      totals.errors += counts.errors
+      run.progress.bytesTotal = totals.bytes
+      run.progress.bytesDone = totals.bytes
+      return {
+        id: `mirror-${run.runId}`,
+        root,
+        startedAt,
+        finishedAt: Date.now(),
+        files: scan.files.length,
+        bytes: scan.bytesTotal,
+        uploaded: counts.uploaded,
+        uploadedBytes: counts.uploadedBytes,
+        skippedUnchanged: counts.skipped,
+        errors: counts.errors,
+        enc: false,
+        mirror: true,
+        sessionId: run.sessionId,
+        cancelled: false,
+      }
+    }
 
     run.progress.phase = 'finalizing'
     run.progress.message = `写快照清单(${hashes.size} 个文件)`
@@ -435,6 +466,34 @@ export class BackupEngine {
     maxFileBytes: number,
   ): Promise<{ uploaded: boolean; storedSize: number }> {
     run.progress.currentPath = file.relPath
+    // 源码镜像模式:不哈希、不变换,直接按原始相对路径存源文件;
+    // 变更检测用 mtime+size 令牌(已知令牌跳过,rsync 式增量)
+    if (normalizeLayout(cfg.storageLayout) === 'mirror') {
+      const token = createHash('sha256').update(`${file.relPath}|${file.mtimeMs}|${file.size}`).digest('hex')
+      hashes.set(file.relPath, token)
+      if (this.known.has(token)) {
+        run.progress.bytesDone = Math.min(run.progress.bytesTotal, run.progress.bytesDone + file.size)
+        return { uploaded: false, storedSize: 0 }
+      }
+      let size = file.size
+      try {
+        size = (await stat(file.absPath)).size
+      } catch {
+        /* 文件刚被删:按扫描时大小上报,putObject 自会报错 */
+      }
+      if (size > maxFileBytes) {
+        this.known.set(token, Date.now())
+        return { uploaded: false, storedSize: 0 }
+      }
+      await this.waitWhilePaused(run)
+      await run.bucket.take(size, run.abort.signal)
+      await backend.putObject(file.relPath, file.absPath, size)
+      this.known.set(token, Date.now())
+      this.knownDirty = true
+      this.sampleSpeed(run)
+      run.progress.etaSec = this.sampleEta(run)
+      return { uploaded: true, storedSize: size }
+    }
     const { hash, size } = await hashFile(file.absPath)
     hashes.set(file.relPath, hash)
     // 进度记账:实际哈希到的字节数(可能与扫描时略有出入,结尾会对齐)
@@ -554,6 +613,16 @@ export class BackupEngine {
       if (!exists.has(id)) return id
     }
     return `${base}-${randomBytes(2).toString('hex')}`
+  }
+
+  /** 启动备份(宿主 boot 后 ~45s 调用一次):仅在用户显式开启 backupOnStartup 时执行。 */
+  async startupTick(): Promise<boolean> {
+    const cfg = this.getConfig()
+    if (!cfg.backupOnStartup || this.run) return false
+    const roots = parseWorkspaces(cfg.workspaces)
+    if (!roots.length || !this.isDestinationConfigured(cfg)) return false
+    await this.start(roots, 'auto')
+    return true
   }
 
   // ── 调度心跳(由宿主侧 60s 定时器调用) ────────────────────────────────────

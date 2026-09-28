@@ -61,18 +61,21 @@ export class WebDavBackend implements BackupBackend {
     }
   }
 
-  async init(): Promise<void> {
-    await this.mkdirp('/blobs')
-    await this.mkdirp('/snapshots')
-    const meta = JSON.stringify({
-      plugin: 'dsh-like-zcode',
-      kind: 'webdav',
-      note: '此目录由 dsh-like-zcode 创建:用户本人主动开启并知情。别学 ZCode。',
-      createdAt: new Date().toISOString(),
-    })
-    await this.request('PUT', '/meta.json', { body: meta, headers: { 'content-type': 'application/json' }, timeoutMs: 20_000 }).then(async (res) => {
-      if (!WebDavBackend.isOk(res.status)) throw new Error(`WebDAV 写 meta.json → ${res.status}`)
-    })
+  async init(layout: 'snapshot' | 'mirror' = 'snapshot'): Promise<void> {
+    if (layout === 'snapshot') {
+      await this.mkdirp('/blobs')
+      await this.mkdirp('/snapshots')
+    }
+    try {
+      await this.request('PUT', '/meta.json', { body: JSON.stringify({
+        plugin: 'dsh-like-zcode',
+        kind: 'webdav',
+        note: '此目录由 dsh-like-zcode 创建:用户本人主动开启并知情。别学 ZCode。',
+        createdAt: new Date().toISOString(),
+      }), headers: { 'content-type': 'application/json' }, timeoutMs: 20_000 })
+    } catch {
+      /* 标记文件可选(镜像模式下前缀目录可能尚未创建,putObject 时会自动建) */
+    }
   }
 
   private blobPath(hash: string): string {
@@ -92,18 +95,24 @@ export class WebDavBackend implements BackupBackend {
   }
 
   async putBlob(hash: string, filePath: string, size: number): Promise<void> {
-    await this.mkdirp(`/blobs/${hash.slice(0, 2)}`)
+    await this.putObject(`blobs/${hash.slice(0, 2)}/${hash}`, filePath, size)
+  }
+
+  async putObject(relKey: string, filePath: string, size: number): Promise<void> {
+    const dir = relKey.split('/').slice(0, -1).join('/')
+    if (dir) await this.mkdirp(`/${dir}`)
+    const key = `/${relKey.split('/').map(encodeURIComponent).join('/')}`
     // 同名覆盖:先删(WebDAV 对覆盖 PUT 行为不一,删了再传最稳)
-    await this.request('DELETE', this.blobPath(hash), { timeoutMs: 15_000 }).catch(() => undefined)
+    await this.request('DELETE', key, { timeoutMs: 15_000 }).catch(() => undefined)
     const body = createReadStream(filePath)
-    const res = await this.request('PUT', this.blobPath(hash), {
+    const res = await this.request('PUT', key, {
       body: body as unknown as WebDavRequestInit['body'],
       headers: { 'content-length': String(size), 'content-type': 'application/octet-stream' },
       timeoutMs: 0,
     })
     if (!WebDavBackend.isOk(res.status)) {
       const text = await res.text().catch(() => '')
-      throw new Error(`WebDAV PUT blob → ${res.status} ${text.slice(0, 200)}`)
+      throw new Error(`WebDAV PUT ${relKey} → ${res.status} ${text.slice(0, 200)}`)
     }
   }
 

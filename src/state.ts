@@ -39,6 +39,8 @@ export interface HistoryEntry {
   cancelled: boolean
   /** 触发备份的 dsh 会话 id(按会话备份时记录)。 */
   sessionId?: string
+  /** 源码镜像模式(无快照清单,历史仅留运行记录)。 */
+  mirror?: boolean
 }
 
 export function emptyProgress(): RunProgress {

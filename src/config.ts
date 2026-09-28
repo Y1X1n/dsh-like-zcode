@@ -7,6 +7,8 @@ import Schema from '@deepseek-ai/schemastery'
 export interface LikeZcodeConfig {
   /** 总闸:默认 false。不开就不动一个字节——这一点和某个叫 ZCode 的不一样。 */
   enabled: boolean
+  /** 存储布局:snapshot=快照+内容寻址去重(可回溯历史);mirror=源码镜像(远端直接浏览源文件)。 */
+  storageLayout: string
   /** 备份目录清单,每行一个绝对路径。 */
   workspaces: string
   /** 备份 .git 版本历史(致敬"全量",不过这次落在你自己手里)。 */
@@ -40,6 +42,8 @@ export interface LikeZcodeConfig {
   concurrency: number
   /** manual | interval | window(宽松 string,运行时归一化)。 */
   scheduleMode: string
+  /** 每次 dsh 启动后约 45 秒自动静默备份一次(仍受总开关与目标配置约束)。 */
+  backupOnStartup: boolean
   /** interval 模式的间隔(小时);window 模式下的最小间隔同样用它。 */
   intervalHours: number
   /** window 模式起始小时(0-23)。 */
@@ -61,6 +65,7 @@ export type ScheduleMode = 'manual' | 'interval' | 'window'
 
 export const ConfigSchema: Schema<LikeZcodeConfig> = Schema.object({
   enabled: Schema.boolean().default(false).description('总开关(默认关;开启前请先配好目标并点"测试连接")'),
+  storageLayout: Schema.string().default('snapshot').description('存储布局:snapshot(快照+去重,可回溯)/ mirror(源码镜像,远端直接浏览)'),
   workspaces: Schema.string().default('').description('备份目录,每行一个绝对路径(如 E:\\work\\project-a)'),
   includeGit: Schema.boolean().default(true).description('备份 .git 版本历史(致敬"全量",这次在你自己手里)'),
   respectGitignore: Schema.boolean().default(true).description('尊重仓库根目录 .gitignore'),
@@ -84,6 +89,7 @@ export const ConfigSchema: Schema<LikeZcodeConfig> = Schema.object({
   maxUploadKBps: Schema.number().min(64).max(1_048_576).default(4096).description('上传限速(KB/s)——不影响正常网络'),
   concurrency: Schema.number().min(1).max(8).default(2).description('并发上传数'),
   scheduleMode: Schema.string().default('manual').description('自动备份:manual(只手动)· interval(按间隔)· window(夜间窗口)'),
+  backupOnStartup: Schema.boolean().default(false).description('每次启动 dsh 约 45 秒后自动静默备份(未变更文件自动跳过)'),
   intervalHours: Schema.number().min(1).max(720).default(24).description('自动备份最小间隔(小时)'),
   windowStart: Schema.number().min(0).max(23).default(2).description('夜间窗口开始(时)'),
   windowEnd: Schema.number().min(0).max(23).default(7).description('夜间窗口结束(时)'),
@@ -96,6 +102,12 @@ export const ConfigSchema: Schema<LikeZcodeConfig> = Schema.object({
 export function normalizeBackend(value: unknown): BackendKind {
   if (value === 'webdav' || value === 's3') return value
   return 'localdir'
+}
+
+export type StorageLayout = 'snapshot' | 'mirror'
+
+export function normalizeLayout(value: unknown): StorageLayout {
+  return value === 'mirror' ? 'mirror' : 'snapshot'
 }
 
 export function normalizeScheduleMode(value: unknown): ScheduleMode {

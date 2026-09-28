@@ -108,5 +108,15 @@ export function apply(ctx: Context, config: unknown): void {
     return () => clearInterval(timer)
   })
 
+  // ── 启动静默备份:boot 后 ~45s 触发一次(仅 backupOnStartup 开启时)。
+  //    未变更文件靠持久化的去重/变更索引自动跳过,近乎零上传。
+  lctx.effect?.(() => {
+    const timer = setTimeout(() => {
+      void engine.startupTick().catch(() => undefined)
+    }, 45_000)
+    timer.unref?.()
+    return () => clearTimeout(timer)
+  })
+
   console.log(`[${name}] loaded · 代号 Repo Phoenix 🐦‍🔥 · 默认关闭;启用前先在设置里填你自己的服务器`)
 }

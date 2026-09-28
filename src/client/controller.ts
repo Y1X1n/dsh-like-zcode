@@ -48,6 +48,7 @@ export interface HistoryEntryLike {
   enc: boolean
   cancelled: boolean
   sessionId?: string
+  mirror?: boolean
 }
 
 export interface SessionInfoLike {

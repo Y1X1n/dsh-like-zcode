@@ -4,6 +4,7 @@ import type { StatusController } from './controller.js'
 /** 设置面(settingsScope.bind 的保守子集;值可能缺字段,全部按 Partial 处理)。 */
 export interface LikeZcodeSettingsValue {
   enabled?: boolean
+  storageLayout?: string
   workspaces?: string
   includeGit?: boolean
   respectGitignore?: boolean
@@ -29,6 +30,7 @@ export interface LikeZcodeSettingsValue {
   windowEnd?: number
   encryptionEnabled?: boolean
   passphrase?: string
+  backupOnStartup?: boolean
   retentionRuns?: number
 }
 
@@ -53,8 +55,12 @@ const styles = {
   desc: { color: 'var(--dsw-alias-label-primary-dimmed, rgba(128,128,128,0.9))', fontSize: 11.5, marginTop: 2 } as const,
   group: { marginTop: 8, borderTop: '1px solid var(--dsw-alias-border-l3, rgba(128,128,128,0.15))', paddingTop: 6 } as const,
   groupTitle: { fontWeight: 600, fontSize: 11.5, color: 'var(--dsw-alias-label-primary-dimmed, rgba(128,128,128,0.9))' } as const,
-  row: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' as const },
-  label: { minWidth: 118, fontSize: 12 } as const,
+  fieldBlock: { marginTop: 10 } as const,
+  fieldLabel: { fontSize: 11.5, color: 'var(--dsw-alias-label-primary-dimmed, rgba(128,128,128,0.9))', marginBottom: 3 } as const,
+  fieldControl: { display: 'flex' } as const,
+  miniRow: { display: 'flex', gap: 12, marginTop: 10 } as const,
+  row: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' as const },
+  label: { fontSize: 12 } as const,
   input: {
     flex: 1,
     minWidth: 140,
@@ -79,6 +85,7 @@ const styles = {
     padding: '3px 8px',
   } as const,
   select: {
+    flex: 1,
     borderRadius: 6,
     border: '1px solid var(--dsw-alias-border-l3, rgba(128,128,128,0.2))',
     background: 'var(--dsw-alias-bg-layer-2, #fff)',
@@ -87,7 +94,7 @@ const styles = {
     fontSize: 12,
     padding: '2px 6px',
   } as const,
-  hint: { color: 'var(--dsw-alias-label-primary-dimmed, rgba(128,128,128,0.9))', fontSize: 11 } as const,
+  hint: { color: 'var(--dsw-alias-label-primary-dimmed, rgba(128,128,128,0.9))', fontSize: 11, marginTop: 4 } as const,
   btn: {
     borderRadius: 6,
     border: '1px solid var(--dsw-alias-border-l3, rgba(128,128,128,0.25))',
@@ -213,9 +220,17 @@ function CollapsibleGroup(props: { groupKey: string; title: string; defaultOpen?
   )
 }
 
-// ── 草稿输入框:输入时写本地草稿(不受状态轮询重渲染影响),失焦才提交配置 ────
-// 之前的版本是"受控 value + 只在 onBlur 提交、无 onChange",卡片每 1.5s 轮询
-// 重渲染一次,用户敲的每个字都会被下一轮渲染冲掉——等于什么都输不进去。
+/** 官方风格字段块:标签在上、控件通栏。 */
+function FieldBlock(props: { label: string; children: ReactNode }) {
+  return (
+    <div style={styles.fieldBlock}>
+      <div style={styles.fieldLabel}>{props.label}</div>
+      <div style={styles.fieldControl}>{props.children}</div>
+    </div>
+  )
+}
+
+// ── 草稿输入框:输入时写本地草稿(不受状态轮询重渲染影响),防抖自动提交 ────────
 
 interface DraftFieldProps {
   value?: string
@@ -310,7 +325,7 @@ const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
       s3Region: 'oss-cn-hangzhou',
       s3PathStyle: true,
     },
-    hint: '地域按你的 Bucket 调整(如 oss-cn-beijing);ECS 同地域可用内网端点 oss-cn-xxx-internal.aliyuncs.com 免流量费。',
+    hint: '地域按你的 Bucket 调整(如 oss-cn-beijing);ECS 同地域可用内网端点 oss-cn-xxx-internal.aliyuncs.com 免流量费。详细步骤见 docs/BACKENDS.md。',
   },
   tencent: {
     label: '腾讯云 COS',
@@ -320,7 +335,7 @@ const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
       s3Region: 'ap-beijing',
       s3PathStyle: true,
     },
-    hint: '地域按你的存储桶调整(如 ap-guangzhou);同地域云主机可换内网端点 cos.ap-xxx-internal.myqcloud.com。',
+    hint: '桶名要带 APPID 后缀整体填入;SecretId 填 AccessKeyId、SecretKey 填 SecretAccessKey(腾讯的字段名反着叫)。详见 docs/BACKENDS.md。',
   },
   huawei: {
     label: '华为云 OBS',
@@ -330,7 +345,7 @@ const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
       s3Region: 'cn-north-4',
       s3PathStyle: true,
     },
-    hint: '地域按你的桶调整;密钥在控制台"我的凭证"里创建。',
+    hint: '地域按你的桶调整;密钥在"我的凭证 → 访问密钥"创建下载。详见 docs/BACKENDS.md。',
   },
   jdcloud: {
     label: '京东云 OSS',
@@ -340,7 +355,7 @@ const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
       s3Region: 'cn-north-1',
       s3PathStyle: true,
     },
-    hint: '以京东云控制台展示的 S3 兼容 Endpoint 为准,预设仅供参考。',
+    hint: 'S3 兼容端点格式 s3.{region}.jdcloud-oss.com,以控制台"空间详情 → 兼容 S3"为准。详见 docs/BACKENDS.md。',
   },
   r2: {
     label: 'Cloudflare R2',
@@ -350,7 +365,7 @@ const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
       s3Region: 'auto',
       s3PathStyle: true,
     },
-    hint: 'Endpoint 里的 <账户ID> 换成 R2 概览页右侧的账户 ID;Bucket=控制台建的桶名;AccessKeyId/SecretAccessKey 在"管理 R2 API 令牌"创建(Object Read & Write,只授该桶),Secret 只显示一次。',
+    hint: 'Endpoint 里的 <账户ID> 换成 R2 概览页右侧的账户 ID;Bucket=控制台建的桶名;AccessKeyId/SecretAccessKey 在"管理 R2 API 令牌"创建(Object Read & Write,只授该桶),Secret 只显示一次。免费 10GB/月。详见 docs/BACKENDS.md。',
   },
   jianguoyun: {
     label: '坚果云',
@@ -358,7 +373,7 @@ const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
       backend: 'webdav',
       webdavUrl: 'https://dav.jianguoyun.com/dav/',
     },
-    hint: '用户名=注册邮箱,密码=应用密码(网页版 → 账户信息 → 安全选项);免费版流量配额较小。',
+    hint: '用户名=注册邮箱,密码=应用密码(网页版 → 账户信息 → 安全选项);免费版每月上传 1GB。详见 docs/BACKENDS.md。',
   },
   synology: {
     label: '群晖 DSM',
@@ -366,7 +381,7 @@ const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
       backend: 'webdav',
       webdavUrl: 'http://NAS局域网IP:5005',
     },
-    hint: '先在套件中心安装 WebDAV Server 并启用 5005(HTTP)/5006(HTTPS);建议为备份单开一个受限账号。',
+    hint: '先在套件中心安装 WebDAV Server 并启用 5005(HTTP)/5006(HTTPS);建议为备份单开一个受限账号。详见 docs/BACKENDS.md。',
   },
   ecs: {
     label: 'ECS 自建(like-zdav.py)',
@@ -401,21 +416,6 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
     const [sessionsList, setSessionsList] = useState<import('./controller.js').SessionInfoLike[]>([])
     const [sessionsLoading, setSessionsLoading] = useState(false)
     const [selectedSessionId, setSelectedSessionId] = useState('')
-    const loadSessions = () => {
-      setSessionsLoading(true)
-      void controller.actions
-        .listSessions()
-        .then((list) => {
-          const usable = list.filter((s) => s.workspace)
-          setSessionsList(usable)
-          setSelectedSessionId((prev) => (prev && usable.some((s) => s.sessionId === prev) ? prev : (usable[0]?.sessionId ?? '')))
-        })
-        .finally(() => setSessionsLoading(false))
-    }
-    const changeRunScope = (next: 'all' | 'dir' | 'session') => {
-      setRunScope(next)
-      if (next === 'session' && sessionsList.length === 0) loadSessions()
-    }
     const [cardOpen, setCardOpen] = useState<boolean>(readCardOpen)
     const [preset, setPreset] = useState<string>('custom')
     const toggleCard = () => {
@@ -436,11 +436,11 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
         void scope.set(field as keyof LikeZcodeSettingsValue, fieldValue as never)
       }
     }
-    const setBool = (key: 'enabled' | 'includeGit' | 'respectGitignore' | 's3PathStyle' | 'encryptionEnabled') =>
+    const setBool = (key: 'enabled' | 'includeGit' | 'respectGitignore' | 's3PathStyle' | 'encryptionEnabled' | 'backupOnStartup') =>
       (e: { target: { checked: boolean } }) => {
         void scope.set(key, e.target.checked)
       }
-    const setText = (key: 'workspaces' | 'excludePatterns' | 'localDir' | 'webdavUrl' | 'webdavUsername' | 'webdavPassword' | 's3Endpoint' | 's3Region' | 's3Bucket' | 's3AccessKeyId' | 's3SecretAccessKey' | 'passphrase' | 'remotePrefix' | 'backend' | 'scheduleMode') =>
+    const setText = (key: 'storageLayout' | 'workspaces' | 'excludePatterns' | 'localDir' | 'webdavUrl' | 'webdavUsername' | 'webdavPassword' | 's3Endpoint' | 's3Region' | 's3Bucket' | 's3AccessKeyId' | 's3SecretAccessKey' | 'passphrase' | 'remotePrefix' | 'backend' | 'scheduleMode') =>
       (v: string) => {
         void scope.set(key, v)
       }
@@ -449,8 +449,24 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
         const n = Number.parseInt(v, 10)
         if (Number.isFinite(n)) void scope.set(key, n)
       }
+    const loadSessions = () => {
+      setSessionsLoading(true)
+      void controller.actions
+        .listSessions()
+        .then((list) => {
+          const usable = list.filter((s) => s.workspace)
+          setSessionsList(usable)
+          setSelectedSessionId((prev) => (prev && usable.some((s) => s.sessionId === prev) ? prev : (usable[0]?.sessionId ?? '')))
+        })
+        .finally(() => setSessionsLoading(false))
+    }
+    const changeRunScope = (next: 'all' | 'dir' | 'session') => {
+      setRunScope(next)
+      if (next === 'session' && sessionsList.length === 0) loadSessions()
+    }
 
     const backend = value.backend ?? 'localdir'
+    const mirror = value.storageLayout === 'mirror'
     const running = status ? RUNNING.has(status.phase) : false
     const run = status?.run
     const pct = run && run.bytesTotal > 0 ? Math.min(1, run.bytesDone / run.bytesTotal) : run?.phase === 'done' ? 1 : 0
@@ -580,7 +596,7 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
                   .slice(0, 3)
                   .map(
                     (h) =>
-                      `${h.id}${h.sessionId ? '(会话 ' + h.sessionId.slice(0, 8) + ')' : ''}(${h.files} 文件 / 实传 ${humanBytes(h.uploadedBytes)}${h.enc ? ' · 加密' : ''}${h.cancelled ? ' · 取消' : ''})`,
+                      `${h.mirror ? '镜像' : h.id}${h.sessionId ? '(会话 ' + h.sessionId.slice(0, 8) + ')' : ''}(${h.files} 文件 / 实传 ${humanBytes(h.uploadedBytes)}${h.enc ? ' · 加密' : ''}${h.cancelled ? ' · 取消' : ''})`,
                   )
                   .join(' · ')}
               </div>
@@ -592,14 +608,14 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
         )}
 
         <CollapsibleGroup groupKey="content" title="备份内容" defaultOpen>
-          <div style={styles.row}>
+          <FieldBlock label="备份目录(每行一个绝对路径)">
             <DraftField
               multiline
               value={value.workspaces ?? ''}
-              placeholder={'E:\\work\\project-a\nE:\\work\\project-b(每行一个绝对路径)'}
+              placeholder={'E:\\work\\project-a\nE:\\work\\project-b'}
               onCommit={setText('workspaces')}
             />
-          </div>
+          </FieldBlock>
           <div style={styles.row}>
             <label style={styles.row}>
               <input type="checkbox" checked={value.includeGit !== false} onChange={setBool('includeGit')} />
@@ -609,22 +625,40 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
               <input type="checkbox" checked={value.respectGitignore !== false} onChange={setBool('respectGitignore')} />
               <span style={styles.label}>尊重 .gitignore</span>
             </label>
-            <span style={styles.label}>单文件上限(MB)</span>
-            <DraftField numeric value={String(value.maxFileMB ?? 512)} onCommit={setNumber('maxFileMB')} />
           </div>
-          <div style={styles.row}>
+          <div style={styles.miniRow}>
+            <div style={{ ...styles.fieldBlock, flex: 1, marginTop: 0 }}>
+              <div style={styles.fieldLabel}>单文件上限(MB)</div>
+              <div style={styles.fieldControl}>
+                <DraftField numeric value={String(value.maxFileMB ?? 512)} onCommit={setNumber('maxFileMB')} />
+              </div>
+            </div>
+            <div style={{ ...styles.fieldBlock, flex: 2, marginTop: 0 }}>
+              <div style={styles.fieldLabel}>存储布局</div>
+              <div style={styles.fieldControl}>
+                <select style={styles.select} value={value.storageLayout ?? 'snapshot'} onChange={(e) => setText('storageLayout')(e.target.value)}>
+                  <option value="snapshot">快照 + 去重(可回溯历史)</option>
+                  <option value="mirror">源码镜像(远端直接浏览源文件)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div style={styles.hint}>
+            {mirror
+              ? '源码镜像:文件按原始路径直存(远端可直接浏览),mtime 未变的文件自动跳过;不含快照历史与加密。'
+              : '快照 + 去重:内容寻址存储,第二次备份近乎零上传,可回溯每一时点。'}
+          </div>
+          <FieldBlock label="额外排除 pattern(每行一个,gitignore 风格;node_modules 等默认已排除,可用 ! 反选救回)">
             <DraftField
               multiline
               value={value.excludePatterns ?? ''}
-              placeholder={'额外排除 pattern(每行一个,gitignore 风格;node_modules 等默认已排除,可用 ! 反选救回)'}
               onCommit={setText('excludePatterns')}
             />
-          </div>
+          </FieldBlock>
         </CollapsibleGroup>
 
         <CollapsibleGroup groupKey="destination" title="备份目标(你自己的服务器;接入指南见 docs/BACKENDS.md,含 ECS 一条命令方案)">
-          <div style={styles.row}>
-            <span style={styles.label}>服务商预设</span>
+          <FieldBlock label="服务商预设">
             <select
               style={styles.select}
               value={preset}
@@ -641,55 +675,89 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
                 </option>
               ))}
             </select>
-          </div>
+          </FieldBlock>
           {preset !== 'custom' && PROVIDER_PRESETS[preset] && (
             <div style={styles.hint}>{PROVIDER_PRESETS[preset].hint}</div>
           )}
-          <div style={styles.row}>
-            <span style={styles.label}>类型</span>
-            <select style={styles.select} value={backend} onChange={(e) => setText('backend')(e.target.value)}>
-              <option value="localdir">localdir(本地盘 / NAS 映射盘)</option>
-              <option value="webdav">WebDAV(群晖/威联通/坚果云/Nextcloud)</option>
-              <option value="s3">S3 兼容(阿里云OSS/腾讯COS/R2/B2/MinIO…)</option>
-            </select>
-            <span style={styles.label}>路径前缀</span>
-            <DraftField value={value.remotePrefix ?? 'dsh-like-zcode'} onCommit={setText('remotePrefix')} />
+          <div style={styles.miniRow}>
+            <div style={{ ...styles.fieldBlock, flex: 1, marginTop: 0 }}>
+              <div style={styles.fieldLabel}>类型</div>
+              <div style={styles.fieldControl}>
+                <select style={styles.select} value={backend} onChange={(e) => setText('backend')(e.target.value)}>
+                  <option value="localdir">localdir(本地盘 / NAS 映射盘)</option>
+                  <option value="webdav">WebDAV(群晖/威联通/坚果云/Nextcloud)</option>
+                  <option value="s3">S3 兼容(阿里云OSS/腾讯COS/R2/B2/MinIO…)</option>
+                </select>
+              </div>
+            </div>
+            <div style={{ ...styles.fieldBlock, flex: 1, marginTop: 0 }}>
+              <div style={styles.fieldLabel}>路径前缀</div>
+              <div style={styles.fieldControl}>
+                <DraftField value={value.remotePrefix ?? 'dsh-like-zcode'} onCommit={setText('remotePrefix')} />
+              </div>
+            </div>
           </div>
           {backend === 'localdir' && (
-            <div style={styles.row}>
-              <span style={styles.label}>目录</span>
-              <DraftField value={value.localDir ?? ''} placeholder="如 E:\\backups 或 NAS 映射盘 Z:\\backups" onCommit={setText('localDir')} />
-            </div>
+            <FieldBlock label="目录(可以是 NAS 的 Windows 映射盘)">
+              <DraftField value={value.localDir ?? ''} placeholder="如 E:\\backups 或 Z:\\backups" onCommit={setText('localDir')} />
+            </FieldBlock>
           )}
           {backend === 'webdav' && (
             <>
-              <div style={styles.row}>
-                <span style={styles.label}>地址</span>
+              <FieldBlock label="服务地址">
                 <DraftField value={value.webdavUrl ?? ''} placeholder="http://nas:5005 或 https://dav.jianguoyun.com/dav/" onCommit={setText('webdavUrl')} />
-              </div>
-              <div style={styles.row}>
-                <span style={styles.label}>用户名</span>
-                <DraftField value={value.webdavUsername ?? ''} onCommit={setText('webdavUsername')} />
-                <span style={styles.label}>密码</span>
-                <DraftField password value={value.webdavPassword ?? ''} placeholder={'坚果云请用"应用密码"'} onCommit={setText('webdavPassword')} />
+              </FieldBlock>
+              <div style={styles.miniRow}>
+                <div style={{ ...styles.fieldBlock, flex: 1, marginTop: 0 }}>
+                  <div style={styles.fieldLabel}>用户名</div>
+                  <div style={styles.fieldControl}>
+                    <DraftField value={value.webdavUsername ?? ''} onCommit={setText('webdavUsername')} />
+                  </div>
+                </div>
+                <div style={{ ...styles.fieldBlock, flex: 1, marginTop: 0 }}>
+                  <div style={styles.fieldLabel}>密码</div>
+                  <div style={styles.fieldControl}>
+                    <DraftField password value={value.webdavPassword ?? ''} placeholder={'坚果云请用"应用密码"'} onCommit={setText('webdavPassword')} />
+                  </div>
+                </div>
               </div>
             </>
           )}
           {backend === 's3' && (
             <>
-              <div style={styles.row}>
-                <span style={styles.label}>Endpoint</span>
-                <DraftField value={value.s3Endpoint ?? ''} placeholder="https://oss-cn-hangzhou.aliyuncs.com" onCommit={setText('s3Endpoint')} />
-                <span style={styles.label}>Region</span>
-                <DraftField value={value.s3Region ?? ''} placeholder="oss-cn-hangzhou / ap-beijing / auto" onCommit={setText('s3Region')} />
+              <div style={styles.miniRow}>
+                <div style={{ ...styles.fieldBlock, flex: 2, marginTop: 0 }}>
+                  <div style={styles.fieldLabel}>Endpoint</div>
+                  <div style={styles.fieldControl}>
+                    <DraftField value={value.s3Endpoint ?? ''} placeholder="https://oss-cn-hangzhou.aliyuncs.com" onCommit={setText('s3Endpoint')} />
+                  </div>
+                </div>
+                <div style={{ ...styles.fieldBlock, flex: 1, marginTop: 0 }}>
+                  <div style={styles.fieldLabel}>Region</div>
+                  <div style={styles.fieldControl}>
+                    <DraftField value={value.s3Region ?? ''} placeholder="oss-cn-hangzhou / auto" onCommit={setText('s3Region')} />
+                  </div>
+                </div>
               </div>
-              <div style={styles.row}>
-                <span style={styles.label}>Bucket</span>
-                <DraftField value={value.s3Bucket ?? ''} onCommit={setText('s3Bucket')} />
-                <span style={styles.label}>AccessKeyId</span>
-                <DraftField value={value.s3AccessKeyId ?? ''} onCommit={setText('s3AccessKeyId')} />
-                <span style={styles.label}>SecretKey</span>
-                <DraftField password value={value.s3SecretAccessKey ?? ''} onCommit={setText('s3SecretAccessKey')} />
+              <div style={styles.miniRow}>
+                <div style={{ ...styles.fieldBlock, flex: 1, marginTop: 0 }}>
+                  <div style={styles.fieldLabel}>Bucket</div>
+                  <div style={styles.fieldControl}>
+                    <DraftField value={value.s3Bucket ?? ''} onCommit={setText('s3Bucket')} />
+                  </div>
+                </div>
+                <div style={{ ...styles.fieldBlock, flex: 1, marginTop: 0 }}>
+                  <div style={styles.fieldLabel}>AccessKeyId</div>
+                  <div style={styles.fieldControl}>
+                    <DraftField value={value.s3AccessKeyId ?? ''} onCommit={setText('s3AccessKeyId')} />
+                  </div>
+                </div>
+                <div style={{ ...styles.fieldBlock, flex: 1, marginTop: 0 }}>
+                  <div style={styles.fieldLabel}>SecretAccessKey</div>
+                  <div style={styles.fieldControl}>
+                    <DraftField password value={value.s3SecretAccessKey ?? ''} onCommit={setText('s3SecretAccessKey')} />
+                  </div>
+                </div>
               </div>
               <div style={styles.row}>
                 <label style={styles.row}>
@@ -703,40 +771,80 @@ export function createSettingsCard(scope: BoundSettingsScope, controller: Status
 
         <CollapsibleGroup groupKey="schedule" title="限速与计划(不影响你正常上网)">
           <div style={styles.row}>
-            <span style={styles.label}>限速(KB/s)</span>
-            <DraftField numeric value={String(value.maxUploadKBps ?? 4096)} onCommit={setNumber('maxUploadKBps')} />
-            <span style={styles.label}>并发</span>
-            <DraftField numeric value={String(value.concurrency ?? 2)} onCommit={setNumber('concurrency')} />
-            <span style={styles.label}>模式</span>
-            <select style={styles.select} value={value.scheduleMode ?? 'manual'} onChange={(e) => setText('scheduleMode')(e.target.value)}>
-              <option value="manual">手动(只按"立即备份")</option>
-              <option value="interval">按间隔自动</option>
-              <option value="window">夜间窗口自动</option>
-            </select>
+            <label style={styles.row}>
+              <input type="checkbox" checked={value.backupOnStartup === true} onChange={setBool('backupOnStartup')} />
+              <span style={styles.label}>每次启动 dsh 后约 45 秒自动静默备份(未变更文件自动跳过)</span>
+            </label>
+          </div>
+          <div style={styles.miniRow}>
+            <div style={{ ...styles.fieldBlock, flex: 1, marginTop: 0 }}>
+              <div style={styles.fieldLabel}>限速(KB/s)</div>
+              <div style={styles.fieldControl}>
+                <DraftField numeric value={String(value.maxUploadKBps ?? 4096)} onCommit={setNumber('maxUploadKBps')} />
+              </div>
+            </div>
+            <div style={{ ...styles.fieldBlock, flex: 1, marginTop: 0 }}>
+              <div style={styles.fieldLabel}>并发</div>
+              <div style={styles.fieldControl}>
+                <DraftField numeric value={String(value.concurrency ?? 2)} onCommit={setNumber('concurrency')} />
+              </div>
+            </div>
+            <div style={{ ...styles.fieldBlock, flex: 2, marginTop: 0 }}>
+              <div style={styles.fieldLabel}>自动备份模式</div>
+              <div style={styles.fieldControl}>
+                <select style={styles.select} value={value.scheduleMode ?? 'manual'} onChange={(e) => setText('scheduleMode')(e.target.value)}>
+                  <option value="manual">手动(只按"立即备份")</option>
+                  <option value="interval">按间隔自动</option>
+                  <option value="window">夜间窗口自动</option>
+                </select>
+              </div>
+            </div>
           </div>
           {(value.scheduleMode ?? 'manual') !== 'manual' && (
-            <div style={styles.row}>
-              <span style={styles.label}>间隔(小时)</span>
-              <DraftField numeric value={String(value.intervalHours ?? 24)} onCommit={setNumber('intervalHours')} />
-              <span style={styles.label}>窗口起(时)</span>
-              <DraftField numeric value={String(value.windowStart ?? 2)} onCommit={setNumber('windowStart')} />
-              <span style={styles.label}>窗口止(时)</span>
-              <DraftField numeric value={String(value.windowEnd ?? 7)} onCommit={setNumber('windowEnd')} />
+            <div style={styles.miniRow}>
+              <div style={{ ...styles.fieldBlock, flex: 1, marginTop: 0 }}>
+                <div style={styles.fieldLabel}>间隔(小时)</div>
+                <div style={styles.fieldControl}>
+                  <DraftField numeric value={String(value.intervalHours ?? 24)} onCommit={setNumber('intervalHours')} />
+                </div>
+              </div>
+              <div style={{ ...styles.fieldBlock, flex: 1, marginTop: 0 }}>
+                <div style={styles.fieldLabel}>窗口起(时)</div>
+                <div style={styles.fieldControl}>
+                  <DraftField numeric value={String(value.windowStart ?? 2)} onCommit={setNumber('windowStart')} />
+                </div>
+              </div>
+              <div style={{ ...styles.fieldBlock, flex: 1, marginTop: 0 }}>
+                <div style={styles.fieldLabel}>窗口止(时)</div>
+                <div style={styles.fieldControl}>
+                  <DraftField numeric value={String(value.windowEnd ?? 7)} onCommit={setNumber('windowEnd')} />
+                </div>
+              </div>
             </div>
           )}
         </CollapsibleGroup>
 
-        <CollapsibleGroup groupKey="security" title="加密与保留(私钥永远只在你本机)">
-          <div style={styles.row}>
-            <label style={styles.row}>
-              <input type="checkbox" checked={value.encryptionEnabled === true} onChange={setBool('encryptionEnabled')} />
-              <span style={styles.label}>端到端加密(AES-256-GCM)</span>
-            </label>
-            <DraftField password value={value.passphrase ?? ''} placeholder="加密口令(丢失无法找回)" onCommit={setText('passphrase')} />
-            <span style={styles.label}>保留快照份数</span>
-            <DraftField numeric value={String(value.retentionRuns ?? 30)} onCommit={setNumber('retentionRuns')} />
-          </div>
-          <div style={styles.hint}>开启加密后建议同时更换路径前缀(旧的前缀里可能有未加密的明文块)。</div>
+        <CollapsibleGroup groupKey="security" title={mirror ? '加密与保留(镜像模式下不可用)' : '加密与保留(私钥永远只在你本机)'}>
+          {mirror ? (
+            <div style={styles.hint}>源码镜像模式按原始路径直存源文件,不做加密与快照保留;需要加密和可回溯历史请切回「快照 + 去重」布局。</div>
+          ) : (
+            <>
+              <div style={styles.row}>
+                <label style={styles.row}>
+                  <input type="checkbox" checked={value.encryptionEnabled === true} onChange={setBool('encryptionEnabled')} />
+                  <span style={styles.label}>端到端加密(AES-256-GCM)</span>
+                </label>
+              </div>
+              {value.encryptionEnabled === true && (
+                <FieldBlock label="加密口令(丢失无法找回;开启后建议同时更换路径前缀)">
+                  <DraftField password value={value.passphrase ?? ''} onCommit={setText('passphrase')} />
+                </FieldBlock>
+              )}
+              <FieldBlock label="保留快照份数(超出自动清理旧清单)">
+                <DraftField numeric value={String(value.retentionRuns ?? 30)} onCommit={setNumber('retentionRuns')} />
+              </FieldBlock>
+            </>
+          )}
         </CollapsibleGroup>
 
         <div style={styles.footer}>
